@@ -33,7 +33,7 @@ export interface SliceSettings {
 }
 
 export const DEFAULT_SLICE: SliceSettings = {
-  layerHeight: 0.24, firstLayerHeight: 0.28, lineWidth: 0.5, baseLayers: 4, topLayers: 0, innerWalls: 0, spiral: true, flip: false,
+  layerHeight: 0.24, firstLayerHeight: 0.28, lineWidth: 0.5, baseLayers: 4, topLayers: 0, innerWalls: 0, spiral: false, flip: false,
   speed: 40, firstLayerSpeed: 20, travelSpeed: 150, maxVolumetric: 12,
   bedX: 256, bedY: 256, filamentDia: 1.75, flowRatio: 0.98, nozzleTemp: 220, bedTemp: 60, fan: 80, retract: 0.8,
   startGcode: 'G28 ; home\nG90\nM83 ; relative extrusion\nG1 Z5 F3000\nG92 E0',
