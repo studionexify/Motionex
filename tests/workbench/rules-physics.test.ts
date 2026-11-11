@@ -51,3 +51,20 @@ describe('print physics', () => {
     expect(simulate(fr, DEFAULT_SLICE, DEFAULT_PHYSICS).stats.sag).toBeGreaterThan(0);
   });
 });
+
+describe('flow compensation', () => {
+  it('cuts blobs where motion rides on relief and keeps the G-code valid', async () => {
+    const { compensate } = await import('../../src/workbench/physics');
+    const { newZone } = await import('../../src/workbench/generator');
+    const d = { ...defaultDesign('vase'), height: 10, maxDiameter: 60, openBottom: true, relief: { kind: 'bubbles', count: 18, depth: 2.5, start: 0, end: 1, transition: 0.01 } };
+    const z = newZone('preset-sine', 0, 1); z.fade = 0;
+    const s = { ...DEFAULT_SLICE, baseLayers: 0 };
+    const ph = { ...DEFAULT_PHYSICS, lag: 0.05 };
+    const before = simulate(slice(d, s, [z], brush), s, ph).stats;
+    const res = slice(d, s, [z], brush);
+    const after = compensate(res, s, ph).stats;
+    expect(before.blobs).toBeGreaterThan(0);
+    expect(after.blobs).toBeLessThan(before.blobs * 0.3);
+    expect(res.gcode).not.toMatch(/[XYZEF]-?(NaN|Infinity)/);
+  });
+});

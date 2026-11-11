@@ -11,7 +11,7 @@ import { fileToMap, textToMap } from './relief-import';
 import { DEFAULT_SLICE, wallLines, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
-import { physicsFor, simulate, type Physics, type PrintSim } from './physics';
+import { compensate, physicsFor, simulate, type Physics, type PrintSim } from './physics';
 import { stlFromDesign } from './stl';
 
 // ───────── host (printer connections; only the desktop app provides one)
@@ -229,7 +229,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     staleTag.textContent = 'Slicing…'; staleTag.hidden = false;
     setTimeout(() => {
       result = slice(S.design, S.slice, S.zones, brushOf, S.rules);
-      sim = simulate(result, S.slice, S.physics);
+      sim = S.slice.evenFlow !== false ? compensate(result, S.slice, S.physics) : simulate(result, S.slice, S.physics);
       stale = false; showToolpath = true;
       view.maxLayer = Infinity; view.flip = S.slice.flip; view.style = S.pathStyle; view.colorBy = S.colorBy; view.ruleColors = S.rules.map((r) => r.color);
       view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); pathStep = 'slice';
@@ -848,7 +848,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       row('Hotend', num(() => s.nozzleTemp, (v) => (s.nozzleTemp = v), 150, 320, 5, '°C', sc)),
       row('Bed', num(() => s.bedTemp, (v) => (s.bedTemp = v), 0, 120, 5, '°C', sc)),
       row('Fan', num(() => s.fan, (v) => (s.fan = v), 0, 100, 5, '%', sc)),
-      row('Retraction', num(() => s.retract, (v) => (s.retract = v), 0, 8, 0.1, 'mm', sc))));
+      row('Retraction', num(() => s.retract, (v) => (s.retract = v), 0, 8, 0.1, 'mm', sc)),
+      row('Even out blobs', toggle(() => s.evenFlow !== false, (v) => (s.evenFlow = v), sc), 'Adjusts extrusion per move from the print physics so slow corners don’t blob.')));
     const sg = h('textarea', { rows: '4', spellcheck: 'false', 'aria-label': 'Start G-code' }) as HTMLTextAreaElement; sg.value = s.startGcode; sg.oninput = () => { s.startGcode = sg.value; sc(); };
     const eg = h('textarea', { rows: '4', spellcheck: 'false', 'aria-label': 'End G-code' }) as HTMLTextAreaElement; eg.value = s.endGcode; eg.oninput = () => { s.endGcode = eg.value; sc(); };
     const adv = h('details', { class: 'mxs-group mxs-adv' }, h('summary', {}, 'Start / end G-code'), h('label', {}, 'Start'), sg, h('label', {}, 'End'), eg);

@@ -3,7 +3,7 @@
 // After slicing it shows the print as it will come out: every bead drawn at its real width and height
 // (flat ribbons, or round tubes for close-up), with blobs, thin spots and sag from physics.ts.
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import { makeInner, makeSurface, meshGrid, type Design } from './design';
 import type { GenResult } from './generator';
 import { DEFECT, type PrintSim } from './physics';
@@ -62,7 +62,8 @@ export class StudioView {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(35, 1, 1, 5000);
-  private controls: OrbitControls;
+  private controls: TrackballControls;
+  private spin = 0;
   private mesh: THREE.Mesh | null = null;
   private meshRows = 0; private meshCols = 0; private meshOpen = false;
   private lines: THREE.LineSegments | null = null;
@@ -93,9 +94,15 @@ export class StudioView {
     this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
     host.append(this.renderer.domElement);
     this.renderer.domElement.className = 'mxs-gl';
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = false;
+    // Free rotation in every direction, like a slicer: no pole, no angle limits.
+    this.controls = new TrackballControls(this.camera, this.renderer.domElement);
+    this.controls.rotateSpeed = 3; this.controls.zoomSpeed = 1.4; this.controls.panSpeed = 0.9;
+    this.controls.staticMoving = true;
     this.controls.addEventListener('change', () => this.draw());
+    const loop = () => { this.controls.update(); this.spin = requestAnimationFrame(loop); };
+    this.controls.addEventListener('start', () => { cancelAnimationFrame(this.spin); loop(); });
+    this.controls.addEventListener('end', () => { this.controls.update(); cancelAnimationFrame(this.spin); });
+    this.renderer.domElement.addEventListener('wheel', () => { requestAnimationFrame(() => this.controls.update()); }, { passive: true });
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x9a9ea6, 2.1));
     const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(300, -500, 400); this.scene.add(key);
     this.scene.add(this.grid);
@@ -103,12 +110,12 @@ export class StudioView {
     this.ro = new ResizeObserver(() => this.resize()); this.ro.observe(host);
     this.resize();
   }
-  dispose() { this.ro.disconnect(); this.controls.dispose(); this.renderer.dispose(); this.renderer.domElement.remove(); }
+  dispose() { cancelAnimationFrame(this.spin); this.ro.disconnect(); this.controls.dispose(); this.renderer.dispose(); this.renderer.domElement.remove(); }
   get canvas() { return this.renderer.domElement; }
 
   private resize() {
     const w = this.host.clientWidth, h = this.host.clientHeight; if (!w || !h) return;
-    this.renderer.setSize(w, h, false); this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.draw();
+    this.renderer.setSize(w, h, false); this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.controls?.handleResize(); this.draw();
   }
   draw() { cancelAnimationFrame(this.pending); this.pending = requestAnimationFrame(() => this.renderer.render(this.scene, this.camera)); }
 
@@ -117,6 +124,7 @@ export class StudioView {
     this.controls.mouseButtons = on
       ? { LEFT: null as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
       : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+    this.controls.mouseButtons = this.controls.mouseButtons;
   }
 
   setTheme(dark: boolean) { this.buildGrid(dark); this.draw(); }
@@ -209,6 +217,7 @@ export class StudioView {
     const dist = Math.max(h, r * 2) * 2.1;
     this.controls.target.set(0, 0, h * 0.45);
     this.camera.position.set(dist * 0.75, -dist * 0.95, h * 0.45 + dist * 0.42);
+    this.camera.up.set(0, 0, 1); this.camera.lookAt(this.controls.target);
     this.controls.update(); this.draw();
   }
 

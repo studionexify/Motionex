@@ -30,6 +30,8 @@ export interface SliceSettings {
   nozzleTemp: number; bedTemp: number; fan: number; retract: number;
   startGcode: string; endGcode: string;
   printer: string;
+  /** Trim / add extrusion per move so slow-downs at corners don't leave blobs (uses the print physics). */
+  evenFlow?: boolean;
   /** Layer height that rule reach (in layers) is measured with; set by coarse previews. */
   reachLayerHeight?: number;
 }
@@ -40,7 +42,7 @@ export const DEFAULT_SLICE: SliceSettings = {
   bedX: 256, bedY: 256, filamentDia: 1.75, flowRatio: 0.98, nozzleTemp: 220, bedTemp: 60, fan: 80, retract: 0.8,
   startGcode: 'G28 ; home\nG90\nM83 ; relative extrusion\nG1 Z5 F3000\nG92 E0',
   endGcode: 'G91\nG1 Z10 F600\nG90\nG1 X10 Y{bedY_minus10} F6000\nM104 S0\nM140 S0\nM106 S0\nM84',
-  printer: 'generic-256',
+  printer: 'generic-256', evenFlow: true,
 };
 
 export const PRINTERS: { id: string; name: string; bed: [number, number, number] }[] = [
@@ -66,7 +68,7 @@ export function newZone(brushId: string, from = 0, to = 1): MotionZone {
 }
 
 /** One move. h/w: nominal bead height and width (w includes flow), e: filament mm, ret: travel with retraction, layer: layer index. */
-export interface Seg { x0: number; y0: number; z0: number; x: number; y: number; z: number; kind: 'wall' | 'motion' | 'base' | 'top' | 'inner' | 'travel'; speed: number; flow: number; h: number; w: number; e: number; ret: boolean; layer: number; ruled: boolean; rule: number }
+export interface Seg { x0: number; y0: number; z0: number; x: number; y: number; z: number; kind: 'wall' | 'motion' | 'base' | 'top' | 'inner' | 'travel'; speed: number; flow: number; h: number; w: number; e: number; ret: boolean; layer: number; ruled: boolean; rule: number; gl?: number }
 export interface GenResult {
   gcode: string; segs: Seg[]; layers: number; layerStart: number[]; layerZ: number[];
   stats: { lengthMm: number; filamentMm: number; grams: number; seconds: number; lines: number; maxOffset: number };
@@ -114,8 +116,9 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     const sp = Math.min(speed, volCap(h, w * flow));
     const e = (d * h * w * flow * s.flowRatio) / fa;
     eTot += e; len += d; secs += d / sp;
+    const gl = out.length;
     emit(`G1 X${f3(nx)} Y${f3(ny)}${Math.abs(nz - z) > 1e-6 ? ` Z${f3(nz)}` : ''} E${f5(e)} F${Math.round(sp * 60)}`);
-    segs.push({ x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind, speed: sp, flow, h, w: w * flow * s.flowRatio, e, ret: false, layer: curLayer, ruled: curRuled, rule: curRule });
+    segs.push({ gl, x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind, speed: sp, flow, h, w: w * flow * s.flowRatio, e, ret: false, layer: curLayer, ruled: curRuled, rule: curRule });
     x = nx; y = ny; z = nz;
   };
 

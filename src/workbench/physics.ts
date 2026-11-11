@@ -135,3 +135,53 @@ export function simulate(res: GenResult, s: SliceSettings, ph: Physics): PrintSi
   }
   return { width, height, droop, speed, ratio, defects, stats: { seconds, blobs, thin, sag: sagN, starve, minRatio: minRatio === 9 ? 1 : minRatio, maxRatio, maxDroop } };
 }
+
+/**
+ * Flow compensation: simulate, then scale each extrusion move's E by planned/deposited so slow corners
+ * (where motion meets relief) stop blobbing and rushed stretches stop thinning. A few damped passes,
+ * because changing E changes the melt pressure that follows. Rewrites the G-code in place.
+ */
+export function compensate(res: GenResult, s: SliceSettings, ph: Physics): PrintSim {
+  const segs = res.segs, lines = res.gcode.split('\n');
+  const nominal = segs.map((g) => g.e);
+  const base = simulate(res, s, ph);                  // gives the planned speed and time of every move
+  const lag = Math.max(1e-4, ph.lag);
+  // Exact inverse of the melt-pressure model in simulate(): choose the commanded flow Qc of each move so the
+  // average delivered flow equals the planned flow Qd (pressure advance). Q is the nozzle flow at the move's start.
+  let Q = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const g = segs[i], d = Math.hypot(g.x - g.x0, g.y - g.y0, g.z - g.z0), v = base.speed[i], t = v > 0 ? d / v : 0;
+    if (g.kind === 'travel') { if (g.ret) Q = 0; else Q *= Math.exp(-t / lag); continue; }
+    if (!(t > 0) || !(nominal[i] > 0)) continue;
+    const Qd = (nominal[i] / t) * (Math.PI * (s.filamentDia / 2) ** 2);   // planned mm³/s
+    const a = Math.exp(-t / lag), bq = (lag / t) * (1 - a);
+    let Qc = bq < 0.999 ? (Qd - Q * bq) / (1 - bq) : Qd;
+    Qc = Math.min(Qd * 3, Math.max(0, Qc));
+    g.e = nominal[i] * (Qc / Qd);
+    Q = Qc + (Q - Qc) * a;
+  }
+  // final judgement against the plan
+  let total = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const g = segs[i]; if (g.kind === 'travel') continue;
+    total += g.e;
+    if (g.gl != null && g.e !== nominal[i]) lines[g.gl] = lines[g.gl].replace(/ E[-0-9.]+/, ` E${(Math.round(g.e * 1e5) / 1e5).toString()}`);
+  }
+  res.gcode = lines.join('\n');
+  res.stats.filamentMm = total + 0; res.stats.grams = (total * Math.PI * (s.filamentDia / 2) ** 2) / 1000 * 1.24;
+  // a fresh simulation on the compensated moves, scored against the original plan
+  const finalSim = simulate(res, s, ph);
+  let blobs = 0, thin = 0, mn = 9, mx = 0;
+  for (let i = 0; i < segs.length; i++) {
+    if (segs[i].kind === 'travel' || !(nominal[i] > 0)) continue;
+    const r = finalSim.ratio[i] * (segs[i].e / nominal[i]);
+    finalSim.ratio[i] = r;
+    let f = finalSim.defects[i] & ~(DEFECT.blob | DEFECT.thin);
+    if (r > 1.3) { f |= DEFECT.blob; blobs++; } else if (r < 0.75) { f |= DEFECT.thin; thin++; }
+    finalSim.defects[i] = f; mn = Math.min(mn, r); mx = Math.max(mx, r);
+    // width shown = what actually lands, against the planned bead
+    finalSim.width[i] = Math.max(0.05, (r * nominal[i] * Math.PI * (s.filamentDia / 2) ** 2) / Math.max(1e-6, Math.hypot(segs[i].x - segs[i].x0, segs[i].y - segs[i].y0, segs[i].z - segs[i].z0)) / Math.max(0.01, finalSim.height[i]));
+  }
+  finalSim.stats.blobs = blobs; finalSim.stats.thin = thin; finalSim.stats.minRatio = mn === 9 ? 1 : mn; finalSim.stats.maxRatio = mx;
+  return finalSim;
+}
