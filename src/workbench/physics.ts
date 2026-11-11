@@ -31,15 +31,18 @@ export const DEFECT = { blob: 1, thin: 2, sag: 4, starve: 8 } as const;
 
 export interface PrintSim {
   /** Per segment (same index as result.segs): actual bead width, height, droop, average speed, deposited/nominal ratio, defect bits. */
+  /** Planner speed at the end of each move (mm/s). */
+  vexit: Float32Array;
   width: Float32Array; height: Float32Array; droop: Float32Array; speed: Float32Array; ratio: Float32Array; defects: Uint8Array;
   stats: { seconds: number; blobs: number; thin: number; sag: number; starve: number; minRatio: number; maxRatio: number; maxDroop: number };
 }
 
 const BUCKETS = 2048;
 
-export function simulate(res: GenResult, s: SliceSettings, ph: Physics): PrintSim {
+/** plan: the originally planned filament per move (defaults to the G-code's own); results are judged against it. */
+export function simulate(res: GenResult, s: SliceSettings, ph: Physics, plan?: number[]): PrintSim {
   const segs = res.segs, n = segs.length;
-  const width = new Float32Array(n), height = new Float32Array(n), droop = new Float32Array(n), speed = new Float32Array(n), ratio = new Float32Array(n), defects = new Uint8Array(n);
+  const vexit = new Float32Array(n), width = new Float32Array(n), height = new Float32Array(n), droop = new Float32Array(n), speed = new Float32Array(n), ratio = new Float32Array(n), defects = new Uint8Array(n);
   const fa = Math.PI * (s.filamentDia / 2) ** 2;
   const a = Math.max(100, ph.accel);
   const jd = (ph.scv * ph.scv * (Math.SQRT2 - 1)) / a;
@@ -90,14 +93,15 @@ export function simulate(res: GenResult, s: SliceSettings, ph: Physics): PrintSi
     }
     seconds += t;
     const vavg = t > 0 ? d / t : 0;
-    speed[i] = vavg;
+    speed[i] = vavg; vexit[i] = v1;
     if (g.kind === 'travel') {
       if (g.ret) { Q = 0; oozeLeft = ph.ooze; } else Q *= Math.exp(-t / Math.max(1e-3, lag || 1e-3));
       continue;
     }
     // commanded flow and lagged nozzle flow
-    const Anom = d > 0 ? (g.e * fa) / d : g.w * g.h;
-    const Qcmd = Anom * vavg;
+    const Acmd = d > 0 ? (g.e * fa) / d : g.w * g.h;
+    const Anom = plan && d > 0 ? (plan[i] * fa) / d : Acmd;
+    const Qcmd = Acmd * vavg;
     const Q0 = Q;
     Q = lag > 0 ? Qcmd + (Q - Qcmd) * Math.exp(-t / lag) : Qcmd;
     let Qavg = lag > 0 && t > 0 ? Qcmd + (Q0 - Qcmd) * (lag / t) * (1 - Math.exp(-t / lag)) : Qcmd;
@@ -133,7 +137,33 @@ export function simulate(res: GenResult, s: SliceSettings, ph: Physics): PrintSi
     defects[i] = flags;
     if (r < minRatio) minRatio = r; if (r > maxRatio) maxRatio = r; if (droop[i] > maxDroop) maxDroop = droop[i];
   }
-  return { width, height, droop, speed, ratio, defects, stats: { seconds, blobs, thin, sag: sagN, starve, minRatio: minRatio === 9 ? 1 : minRatio, maxRatio, maxDroop } };
+  // The molten bead spreads along the line over about one nozzle width: judge (and draw) the material
+  // averaged over that length, not per tiny move.
+  {
+    const win = Math.max(0.3, s.lineWidth), sm = new Float32Array(n);
+    let i0 = 0;
+    while (i0 < n) {
+      if (segs[i0].kind === 'travel') { i0++; continue; }
+      let i1 = i0; while (i1 + 1 < n && segs[i1 + 1].kind !== 'travel') i1++;
+      for (let i = i0; i <= i1; i++) {
+        let wsum = len[i], rsum = ratio[i] * len[i], back = len[i] / 2, fwd = len[i] / 2;
+        for (let j = i - 1; j >= i0 && back < win / 2; j--) { const w = Math.min(len[j], win / 2 - back); wsum += w; rsum += ratio[j] * w; back += len[j]; }
+        for (let j = i + 1; j <= i1 && fwd < win / 2; j++) { const w = Math.min(len[j], win / 2 - fwd); wsum += w; rsum += ratio[j] * w; fwd += len[j]; }
+        sm[i] = wsum > 0 ? rsum / wsum : ratio[i];
+      }
+      i0 = i1 + 1;
+    }
+    blobs = 0; thin = 0; minRatio = 9; maxRatio = 0;
+    for (let i = 0; i < n; i++) {
+      if (segs[i].kind === 'travel') continue;
+      const k = ratio[i] > 0 ? sm[i] / ratio[i] : 1;
+      ratio[i] = sm[i]; width[i] *= k;
+      let f = defects[i] & ~(DEFECT.blob | DEFECT.thin);
+      if (sm[i] > 1.3) { f |= DEFECT.blob; blobs++; } else if (sm[i] < 0.75) { f |= DEFECT.thin; thin++; }
+      defects[i] = f; minRatio = Math.min(minRatio, sm[i]); maxRatio = Math.max(maxRatio, sm[i]);
+    }
+  }
+  return { vexit, width, height, droop, speed, ratio, defects, stats: { seconds, blobs, thin, sag: sagN, starve, minRatio: minRatio === 9 ? 1 : minRatio, maxRatio, maxDroop } };
 }
 
 /**
@@ -141,26 +171,36 @@ export function simulate(res: GenResult, s: SliceSettings, ph: Physics): PrintSi
  * (where motion meets relief) stop blobbing and rushed stretches stop thinning. A few damped passes,
  * because changing E changes the melt pressure that follows. Rewrites the G-code in place.
  */
-export function compensate(res: GenResult, s: SliceSettings, ph: Physics): PrintSim {
+export function compensate(res: GenResult, s: SliceSettings, ph0: Physics): PrintSim {
   const segs = res.segs, lines = res.gcode.split('\n');
+  const fa = Math.PI * (s.filamentDia / 2) ** 2;
+  // Restart blobs: prime less after each retraction by the ooze volume (shorter un-retract), as slicers do.
+  const deprime = s.evenFlow !== false && s.retract > 0 ? Math.min(s.retract * 0.9, ph0.ooze / fa) : 0;
+  if (deprime > 0) for (const g of segs) if (g.kind === 'travel' && g.ret && g.gl != null) lines[g.gl] = `G1 E${(Math.round((s.retract - deprime) * 1000) / 1000).toString()} F2400 ; primed less by the restart ooze`;
+  const ph: Physics = { ...ph0, ooze: Math.max(0, ph0.ooze - deprime * fa) };
   const nominal = segs.map((g) => g.e);
   const base = simulate(res, s, ph);                  // gives the planned speed and time of every move
   const lag = Math.max(1e-4, ph.lag);
   // Exact inverse of the melt-pressure model in simulate(): choose the commanded flow Qc of each move so the
   // average delivered flow equals the planned flow Qd (pressure advance). Q is the nozzle flow at the move's start.
-  let Q = 0;
-  for (let i = 0; i < segs.length; i++) {
-    const g = segs[i], d = Math.hypot(g.x - g.x0, g.y - g.y0, g.z - g.z0), v = base.speed[i], t = v > 0 ? d / v : 0;
-    if (g.kind === 'travel') { if (g.ret) Q = 0; else Q *= Math.exp(-t / lag); continue; }
-    if (!(t > 0) || !(nominal[i] > 0)) continue;
-    const Qd = (nominal[i] / t) * (Math.PI * (s.filamentDia / 2) ** 2);   // planned mm³/s
-    const a = Math.exp(-t / lag), bq = (lag / t) * (1 - a);
-    let Qc = bq < 0.999 ? (Qd - Q * bq) / (1 - bq) : Qd;
-    Qc = Math.min(Qd * 3, Math.max(0, Qc));
-    g.e = nominal[i] * (Qc / Qd);
-    Q = Qc + (Q - Qc) * a;
+  // Pressure advance (as printer firmware does it): the nozzle flow lags the commanded flow by `lag`, so
+  // command Q + lag·dQ/dt. Over one move that is the planned filament plus lag × (planned flow at its end −
+  // planned flow at the end of the move before), in filament mm. It sums to zero over a line, so the total
+  // filament stays the same; it just moves plastic away from slow-downs (blobs) to speed-ups (thin spots).
+  const n = segs.length;
+  let Qprev = 0;
+  for (let i = 0; i < n; i++) {
+    const g = segs[i], d = Math.hypot(g.x - g.x0, g.y - g.y0, g.z - g.z0);
+    if (g.kind === 'travel') { Qprev = g.ret ? 0 : Qprev * Math.exp(-(d / Math.max(1, base.speed[i])) / lag); continue; }
+    if (!(d > 0) || !(nominal[i] > 0)) continue;
+    const A = (nominal[i] * fa) / d;                 // planned bead area
+    const Qend = A * base.vexit[i];
+    let extra = (lag * 0.9 * (Qend - Qprev)) / fa;   // 0.9: the per-move model slightly overshoots at hard stops
+    if (extra > 0 && s.evenThin === false) extra = 0;
+    if (extra < 0 && s.evenFlow === false) extra = 0;
+    g.e = nominal[i] + extra;
+    Qprev = Qend;
   }
-  // final judgement against the plan
   let total = 0;
   for (let i = 0; i < segs.length; i++) {
     const g = segs[i]; if (g.kind === 'travel') continue;
@@ -168,20 +208,8 @@ export function compensate(res: GenResult, s: SliceSettings, ph: Physics): Print
     if (g.gl != null && g.e !== nominal[i]) lines[g.gl] = lines[g.gl].replace(/ E[-0-9.]+/, ` E${(Math.round(g.e * 1e5) / 1e5).toString()}`);
   }
   res.gcode = lines.join('\n');
-  res.stats.filamentMm = total + 0; res.stats.grams = (total * Math.PI * (s.filamentDia / 2) ** 2) / 1000 * 1.24;
-  // a fresh simulation on the compensated moves, scored against the original plan
-  const finalSim = simulate(res, s, ph);
-  let blobs = 0, thin = 0, mn = 9, mx = 0;
-  for (let i = 0; i < segs.length; i++) {
-    if (segs[i].kind === 'travel' || !(nominal[i] > 0)) continue;
-    const r = finalSim.ratio[i] * (segs[i].e / nominal[i]);
-    finalSim.ratio[i] = r;
-    let f = finalSim.defects[i] & ~(DEFECT.blob | DEFECT.thin);
-    if (r > 1.3) { f |= DEFECT.blob; blobs++; } else if (r < 0.75) { f |= DEFECT.thin; thin++; }
-    finalSim.defects[i] = f; mn = Math.min(mn, r); mx = Math.max(mx, r);
-    // width shown = what actually lands, against the planned bead
-    finalSim.width[i] = Math.max(0.05, (r * nominal[i] * Math.PI * (s.filamentDia / 2) ** 2) / Math.max(1e-6, Math.hypot(segs[i].x - segs[i].x0, segs[i].y - segs[i].y0, segs[i].z - segs[i].z0)) / Math.max(0.01, finalSim.height[i]));
-  }
-  finalSim.stats.blobs = blobs; finalSim.stats.thin = thin; finalSim.stats.minRatio = mn === 9 ? 1 : mn; finalSim.stats.maxRatio = mx;
+  res.stats.filamentMm = total; res.stats.grams = (total * Math.PI * (s.filamentDia / 2) ** 2) / 1000 * 1.24;
+  res.plan = nominal;
+  const finalSim = simulate(res, s, ph, nominal);
   return finalSim;
 }

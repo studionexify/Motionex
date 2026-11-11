@@ -32,6 +32,8 @@ export interface SliceSettings {
   printer: string;
   /** Trim / add extrusion per move so slow-downs at corners don't leave blobs (uses the print physics). */
   evenFlow?: boolean;
+  /** Push extra extrusion where pressure has not built up yet (after travels, speed-ups) so lines don't print thin. */
+  evenThin?: boolean;
   /** Layer height that rule reach (in layers) is measured with; set by coarse previews. */
   reachLayerHeight?: number;
 }
@@ -42,7 +44,7 @@ export const DEFAULT_SLICE: SliceSettings = {
   bedX: 256, bedY: 256, filamentDia: 1.75, flowRatio: 0.98, nozzleTemp: 220, bedTemp: 60, fan: 80, retract: 0.8,
   startGcode: 'G28 ; home\nG90\nM83 ; relative extrusion\nG1 Z5 F3000\nG92 E0',
   endGcode: 'G91\nG1 Z10 F600\nG90\nG1 X10 Y{bedY_minus10} F6000\nM104 S0\nM140 S0\nM106 S0\nM84',
-  printer: 'generic-256', evenFlow: true,
+  printer: 'generic-256', evenFlow: true, evenThin: true,
 };
 
 export const PRINTERS: { id: string; name: string; bed: [number, number, number] }[] = [
@@ -73,6 +75,8 @@ export interface GenResult {
   gcode: string; segs: Seg[]; layers: number; layerStart: number[]; layerZ: number[];
   stats: { lengthMm: number; filamentMm: number; grams: number; seconds: number; lines: number; maxOffset: number };
   warnings: string[];
+  /** Planned filament per move before flow compensation (set by compensate). */
+  plan?: number[];
 }
 
 const TAU = Math.PI * 2;
@@ -106,8 +110,9 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     const r = s.retract > 0 && d > 2;
     if (r) emit(`G1 E-${f3(s.retract)} F2400`);
     emit(`G0 X${f3(nx)} Y${f3(ny)}${nz !== z ? ` Z${f3(nz)}` : ''} F${Math.round(s.travelSpeed * 60)}`);
+    const ugl = out.length;
     if (r) emit(`G1 E${f3(s.retract)} F2400`);
-    segs.push({ x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind: 'travel', speed: s.travelSpeed, flow: 0, h: 0, w: 0, e: 0, ret: r, layer: curLayer, ruled: false, rule: -1 });
+    segs.push({ gl: r ? ugl : undefined, x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind: 'travel', speed: s.travelSpeed, flow: 0, h: 0, w: 0, e: 0, ret: r, layer: curLayer, ruled: false, rule: -1 });
     secs += d / s.travelSpeed; x = nx; y = ny; z = nz;
   };
   const extrude = (nx: number, ny: number, nz: number, h: number, w: number, speed: number, flow: number, kind: Seg['kind']) => {
@@ -219,7 +224,8 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     for (let k = 0; k < walls; k++) loops.push(wallLoop(zTop, n, k));
     const outer = loops[0];
     let L = 0; for (let i = 0; i < n; i++) { const a = outer[i], b = outer[(i + 1) % n]; L += Math.hypot(b[0] - a[0], b[1] - a[1]); }
-    const reps = brush && brush.repeat_mode === 'stretch' ? Math.max(1, Math.round(L / period)) : L / period;
+    // whole number of repeats per loop, so the motion meets itself seamlessly where the loop closes
+    const reps = Math.max(1, Math.round(L / period));
     let fade = 0, phase = 0;
     if (brush && zone) {
       const effect = zone.useBrushLayers ? brush.layers ?? null : zone.layers;
@@ -272,7 +278,7 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
             const rb = brushes(q.mr.brushId!);
             if (rb) {
               const rp = Math.max(0.2, rb.period_mm * q.mr.spacing);
-              const rr = rb.repeat_mode === 'stretch' ? Math.max(1, Math.round(L / rp)) : L / rp;
+              const rr = Math.max(1, Math.round(L / rp));
               const eff = q.mr.useBrushLayers ? rb.layers ?? null : q.mr.layers;
               const lp = effectPhase(eff, li);
               if (lp !== null) {

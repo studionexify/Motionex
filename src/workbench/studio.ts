@@ -229,7 +229,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     staleTag.textContent = 'Slicing…'; staleTag.hidden = false;
     setTimeout(() => {
       result = slice(S.design, S.slice, S.zones, brushOf, S.rules);
-      sim = S.slice.evenFlow !== false ? compensate(result, S.slice, S.physics) : simulate(result, S.slice, S.physics);
+      sim = S.slice.evenFlow !== false || S.slice.evenThin !== false ? compensate(result, S.slice, S.physics) : simulate(result, S.slice, S.physics);
       stale = false; showToolpath = true;
       view.maxLayer = Infinity; view.flip = S.slice.flip; view.style = S.pathStyle; view.colorBy = S.colorBy; view.ruleColors = S.rules.map((r) => r.color);
       view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); pathStep = 'slice';
@@ -849,12 +849,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       row('Bed', num(() => s.bedTemp, (v) => (s.bedTemp = v), 0, 120, 5, '°C', sc)),
       row('Fan', num(() => s.fan, (v) => (s.fan = v), 0, 100, 5, '%', sc)),
       row('Retraction', num(() => s.retract, (v) => (s.retract = v), 0, 8, 0.1, 'mm', sc)),
-      row('Even out blobs', toggle(() => s.evenFlow !== false, (v) => (s.evenFlow = v), sc), 'Adjusts extrusion per move from the print physics so slow corners don’t blob.')));
+      row('Even out blobs', toggle(() => s.evenFlow !== false, (v) => (s.evenFlow = v), sc), 'Adjusts extrusion per move from the print physics so slow corners don’t blob.'),
+      row('Even out thin lines', toggle(() => s.evenThin !== false, (v) => (s.evenThin = v), sc), 'Adds extrusion where melt pressure is still building (after moves, speed-ups) so lines don’t print thin.')));
     const sg = h('textarea', { rows: '4', spellcheck: 'false', 'aria-label': 'Start G-code' }) as HTMLTextAreaElement; sg.value = s.startGcode; sg.oninput = () => { s.startGcode = sg.value; sc(); };
     const eg = h('textarea', { rows: '4', spellcheck: 'false', 'aria-label': 'End G-code' }) as HTMLTextAreaElement; eg.value = s.endGcode; eg.oninput = () => { s.endGcode = eg.value; sc(); };
     const adv = h('details', { class: 'mxs-group mxs-adv' }, h('summary', {}, 'Start / end G-code'), h('label', {}, 'Start'), sg, h('label', {}, 'End'), eg);
     right.append(adv);
-    const P = S.physics, pc = () => { persist(); if (result) { sim = simulate(result, S.slice, S.physics); view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); renderSimStats(); } };
+    const P = S.physics, pc = () => { persist(); if (result) { sim = simulate(result, S.slice, { ...S.physics, ooze: result.plan ? 0 : S.physics.ooze }, result.plan); view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); renderSimStats(); } };
     const phys = h('details', { class: 'mxs-group mxs-adv' }, h('summary', {}, 'Print physics (preview)'),
       h('p', { class: 'mxs-hint' }, 'Used to show the print as it will come out: blobs where the nozzle slows, thin lines where it rushes or the hotend runs out of melt, sag on overhangs, seams. Set from your printer; tune after a test print.'),
       row('Acceleration', num(() => P.accel, (v) => (P.accel = v), 500, 30000, 100, 'mm/s²', pc)),

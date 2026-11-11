@@ -68,3 +68,20 @@ describe('flow compensation', () => {
     expect(res.gcode).not.toMatch(/[XYZEF]-?(NaN|Infinity)/);
   });
 });
+
+describe('thin lines and seams', () => {
+  it('thin-lines fix removes thin lines; motion closes on itself', async () => {
+    const { compensate } = await import('../../src/workbench/physics');
+    const { newZone } = await import('../../src/workbench/generator');
+    const d = { ...defaultDesign('vase'), height: 10, maxDiameter: 60, openBottom: true, section: 'square' as const, depth: 0.3, relief: { kind: 'bubbles', count: 18, depth: 2.5, start: 0, end: 1, transition: 0.01 } };
+    const z = newZone('preset-plump', 0, 1); z.fade = 0; z.size = 4; z.spacing = 1.25;
+    const s = { ...DEFAULT_SLICE, baseLayers: 0 };
+    const off = slice(d, { ...s, evenThin: false }, [z], brush); const a = compensate(off, { ...s, evenThin: false }, DEFAULT_PHYSICS).stats;
+    const on = slice(d, s, [z], brush); const b = compensate(on, s, DEFAULT_PHYSICS).stats;
+    expect(b.thin).toBeLessThan(Math.max(3, a.thin * 0.2));
+    // seam: last outer-wall point of a layer meets the first (motion offset continuous)
+    const L = 12, segs = on.segs.slice(on.layerStart[L], on.layerStart[L + 1]).filter((g) => g.kind === 'motion' || g.kind === 'wall');
+    const first = segs[0], last = segs[segs.length - 1];
+    expect(Math.hypot(last.x - first.x0, last.y - first.y0)).toBeLessThan(0.6);
+  });
+});
