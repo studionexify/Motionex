@@ -1,0 +1,233 @@
+// Motionex Studio — design model. A piece is a revolved single wall: a side profile (radius vs height),
+// a top-down section, twist / narrowing, and a surface relief. surfaceR(z, θ) is the one function the
+// mesh, the estimate and the slicer all read, so what you see is what gets printed.
+
+export type Family = 'vase' | 'pendant' | 'shade' | 'bowl';
+export type SectionKind = 'round' | 'faceted' | 'square' | 'petal' | 'star' | 'fluted' | 'flower' | 'teeth';
+export type ReliefKind = 'smooth' | 'ribbed' | 'grooves' | 'fins' | 'rings' | 'wavy' | 'guilloche' | 'vwaves' | 'bubbles' | 'bumps' | 'pyramid' | 'diamond' | 'hammered' | 'sand';
+export type TwistShape = 'linear' | 's' | 'wave';
+
+export interface ProfilePoint { r: number; t: number } // r: 0..1 of max radius, t: 0..1 of height
+export interface Design {
+  name: string;
+  family: Family;
+  outline: string;
+  profile: ProfilePoint[];
+  smoothing: number;     // 0 straight … 1 round
+  height: number;        // mm
+  maxDiameter: number;   // mm
+  section: SectionKind;
+  sides: number;
+  depth: number;         // 0.05..0.5 of radius
+  twist: number;         // degrees over the height
+  twistShape: TwistShape;
+  narrowTop: number;     // -0.6..0.6
+  relief: { kind: ReliefKind; count: number; depth: number; start: number; end: number; transition: number };
+  wall: number;          // mm, for the STL wall and estimate
+  openBottom: boolean;
+}
+
+const TAU = Math.PI * 2;
+const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+const frac = (v: number) => v - Math.floor(v);
+const P = (pairs: [number, number][]): ProfilePoint[] => pairs.map(([r, t]) => ({ r, t }));
+
+/** Side silhouettes (r, t). Picking one rewrites the profile and suggests a size and section. */
+export const OUTLINES: { id: string; name: string; families: Family[]; pts: ProfilePoint[]; h?: number; d?: number; section?: SectionKind }[] = [
+  { id: 'vase', name: 'Vase', families: ['vase'], pts: P([[0.62, 0], [0.92, 0.3], [1, 0.55], [0.72, 0.85], [0.78, 1]]) },
+  { id: 'bulb', name: 'Bulb', families: ['vase', 'pendant'], pts: P([[0.55, 0], [0.95, 0.3], [1, 0.5], [0.7, 0.82], [0.35, 1]]) },
+  { id: 'cylinder', name: 'Cylinder', families: ['vase', 'shade'], pts: P([[1, 0], [1, 0.5], [1, 1]]), section: 'round' },
+  { id: 'hourglass', name: 'Hourglass', families: ['vase', 'shade'], pts: P([[1, 0], [0.62, 0.5], [1, 1]]) },
+  { id: 'barrel', name: 'Barrel', families: ['vase', 'shade'], pts: P([[0.8, 0], [1, 0.5], [0.8, 1]]) },
+  { id: 'drop', name: 'Drop', families: ['vase', 'pendant'], pts: P([[0.6, 0], [1, 0.25], [0.8, 0.65], [0.22, 1]]) },
+  { id: 'cone', name: 'Cone', families: ['vase', 'shade', 'pendant'], pts: P([[1, 0], [0.62, 0.5], [0.25, 1]]) },
+  { id: 'funnel', name: 'Funnel', families: ['vase', 'bowl'], pts: P([[0.4, 0], [0.62, 0.5], [1, 1]]) },
+  { id: 'meiping', name: 'Shoulder jar', families: ['vase'], pts: P([[0.5, 0], [0.7, 0.45], [1, 0.8], [0.45, 0.95], [0.38, 1]]) },
+  { id: 'egg', name: 'Egg', families: ['vase', 'pendant'], pts: P([[0.45, 0], [0.92, 0.25], [1, 0.5], [0.85, 0.78], [0.5, 1]]) },
+  { id: 'pebble', name: 'Standing pebble', families: ['vase'], pts: P([[0.7, 0], [1, 0.25], [0.95, 0.65], [0.62, 1]]) },
+  { id: 'lobed', name: 'Two lobes', families: ['vase', 'shade'], pts: P([[0.75, 0], [1, 0.25], [0.72, 0.5], [1, 0.75], [0.7, 1]]) },
+  { id: 'dome', name: 'Deep dome', families: ['pendant'], pts: P([[1, 0], [0.98, 0.35], [0.82, 0.7], [0.45, 0.93], [0.2, 1]]), h: 160, d: 220 },
+  { id: 'bell', name: 'Bell jar', families: ['pendant', 'shade'], pts: P([[1, 0], [0.88, 0.15], [0.7, 0.45], [0.62, 0.8], [0.4, 1]]), h: 190, d: 200 },
+  { id: 'halfsphere', name: 'Half sphere', families: ['pendant', 'bowl'], pts: P([[1, 0], [0.94, 0.35], [0.75, 0.68], [0.4, 0.93], [0.2, 1]]), h: 110, d: 220 },
+  { id: 'drum', name: 'Soft drum', families: ['shade'], pts: P([[0.92, 0], [1, 0.2], [1, 0.8], [0.92, 1]]), h: 180, d: 220 },
+  { id: 'taper', name: 'Tapered drum', families: ['shade'], pts: P([[1, 0], [0.86, 0.5], [0.72, 1]]), h: 200, d: 230 },
+  { id: 'waist', name: 'High waist', families: ['shade', 'vase'], pts: P([[0.9, 0], [1, 0.3], [0.7, 0.72], [0.85, 1]]) },
+  { id: 'bowl', name: 'Bowl', families: ['bowl'], pts: P([[0.55, 0], [0.85, 0.35], [1, 1]]), h: 70, d: 180 },
+  { id: 'tray', name: 'Low tray', families: ['bowl'], pts: P([[0.86, 0], [0.97, 0.4], [1, 1]]), h: 40, d: 160 },
+];
+
+export const FAMILIES: { id: Family; name: string; h: number; d: number; outline: string; hint: string }[] = [
+  { id: 'vase', name: 'Vase', h: 185, d: 140, outline: 'vase', hint: 'Single-wall vase, prints in spiral mode.' },
+  { id: 'pendant', name: 'Pendant', h: 160, d: 220, outline: 'dome', hint: 'Lamp shade that hangs. Print it upside down (flip in the slicer).' },
+  { id: 'shade', name: 'Table shade', h: 200, d: 220, outline: 'drum', hint: 'Open-ended drum for a table lamp.' },
+  { id: 'bowl', name: 'Bowl & tray', h: 70, d: 180, outline: 'bowl', hint: 'Low, wide pieces.' },
+];
+
+export const SECTIONS: { id: SectionKind; name: string }[] = [
+  { id: 'round', name: 'Round' }, { id: 'faceted', name: 'Faceted' }, { id: 'square', name: 'Square' }, { id: 'petal', name: 'Petal' },
+  { id: 'star', name: 'Star' }, { id: 'fluted', name: 'Fluted' }, { id: 'flower', name: 'Flower' }, { id: 'teeth', name: 'Teeth' },
+];
+
+export const RELIEFS: { id: ReliefKind; name: string; group: string; count: number; depth: number }[] = [
+  { id: 'smooth', name: 'Smooth', group: 'Smooth', count: 0, depth: 0 },
+  { id: 'ribbed', name: 'Ribbed', group: 'Vertical', count: 60, depth: 1.2 },
+  { id: 'grooves', name: 'Grooves', group: 'Vertical', count: 40, depth: 1.5 },
+  { id: 'fins', name: 'Fins', group: 'Vertical', count: 24, depth: 3 },
+  { id: 'rings', name: 'Rings', group: 'Rings', count: 30, depth: 1.2 },
+  { id: 'wavy', name: 'Wavy', group: 'Waves', count: 12, depth: 3 },
+  { id: 'guilloche', name: 'Guilloche', group: 'Waves', count: 40, depth: 1 },
+  { id: 'vwaves', name: 'Vertical waves', group: 'Waves', count: 16, depth: 2.5 },
+  { id: 'bubbles', name: 'Bubbles', group: 'Bubbles', count: 18, depth: 2.5 },
+  { id: 'bumps', name: 'Bumps', group: 'Bubbles', count: 10, depth: 5 },
+  { id: 'pyramid', name: 'Pyramid', group: 'Points', count: 24, depth: 2 },
+  { id: 'diamond', name: 'Diamond', group: 'Points', count: 20, depth: 2 },
+  { id: 'hammered', name: 'Hammered', group: 'Grain', count: 30, depth: 1.5 },
+  { id: 'sand', name: 'Sand', group: 'Grain', count: 120, depth: 0.4 },
+];
+
+export function defaultDesign(family: Family = 'vase'): Design {
+  const f = FAMILIES.find((x) => x.id === family)!;
+  const o = OUTLINES.find((x) => x.id === f.outline)!;
+  return {
+    name: 'Untitled piece', family, outline: o.id, profile: structuredClone(o.pts), smoothing: 0.8,
+    height: o.h ?? f.h, maxDiameter: o.d ?? f.d, section: 'round', sides: 8, depth: 0.15, twist: 0, twistShape: 'linear', narrowTop: 0,
+    relief: { kind: 'smooth', count: 0, depth: 0, start: 0, end: 1, transition: 0.06 }, wall: 2.4, openBottom: family === 'shade' || family === 'pendant',
+  };
+}
+
+// ── profile curve: blend of polyline and Catmull-Rom by smoothing
+function sortedProfile(d: Design) { return [...d.profile].sort((a, b) => a.t - b.t); }
+
+export function profileR(d: Design, t: number, pts = sortedProfile(d)): number {
+  if (pts.length === 0) return 0.5;
+  if (t <= pts[0].t) return pts[0].r;
+  if (t >= pts[pts.length - 1].t) return pts[pts.length - 1].r;
+  let i = 0;
+  while (i < pts.length - 2 && t > pts[i + 1].t) i++;
+  const p1 = pts[i], p2 = pts[i + 1], p0 = pts[i - 1] ?? p1, p3 = pts[i + 2] ?? p2;
+  const span = p2.t - p1.t || 1e-6, u = (t - p1.t) / span;
+  const lin = p1.r + (p2.r - p1.r) * u;
+  // Catmull-Rom with slopes scaled to this span
+  const m1 = ((p2.r - p0.r) / ((p2.t - p0.t) || 1e-6)) * span, m2 = ((p3.r - p1.r) / ((p3.t - p1.t) || 1e-6)) * span;
+  const u2 = u * u, u3 = u2 * u;
+  const cr = (2 * u3 - 3 * u2 + 1) * p1.r + (u3 - 2 * u2 + u) * m1 + (-2 * u3 + 3 * u2) * p2.r + (u3 - u2) * m2;
+  return Math.max(0.02, lin + (cr - lin) * d.smoothing);
+}
+
+function sectionMul(d: Design, th: number): number {
+  const n = Math.max(3, Math.round(d.sides)), k = d.depth;
+  switch (d.section) {
+    case 'round': return 1;
+    case 'faceted': { const a = TAU / n, x = frac(th / a) * a - a / 2; return Math.cos(Math.PI / n) / Math.cos(x); }
+    case 'square': { const p = 2 + 8 * (1 - k); const c = Math.abs(Math.cos(th)), s = Math.abs(Math.sin(th)); const r = (c ** p + s ** p) ** (-1 / p); return r / 2 ** (0.5 - 1 / p); }
+    case 'petal': return 1 - k * (1 - Math.abs(Math.cos((n * th) / 2)));
+    case 'star': { const u = frac((n * th) / TAU); return 1 - k * 2 * Math.abs(u - 0.5); }
+    case 'fluted': return 1 - k * 0.5 * Math.max(0, Math.cos(n * th)) ** 0.6;
+    case 'flower': return 1 - k * (1 - Math.abs(Math.cos((n * th) / 2)) ** 0.5);
+    case 'teeth': return 1 - k * frac((n * th) / TAU);
+  }
+}
+
+function hash(x: number, y: number, z: number) { const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return s - Math.floor(s); }
+function vnoise(x: number, y: number, z: number) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z), xf = x - xi, yf = y - yi, zf = z - zi;
+  const sm = (v: number) => v * v * (3 - 2 * v), u = sm(xf), v = sm(yf), w = sm(zf);
+  const L = (a: number, b: number, t: number) => a + (b - a) * t;
+  const c = (dx: number, dy: number, dz: number) => hash(xi + dx, yi + dy, zi + dz);
+  return L(L(L(c(0, 0, 0), c(1, 0, 0), u), L(c(0, 1, 0), c(1, 1, 0), u), v), L(L(c(0, 0, 1), c(1, 0, 1), u), L(c(0, 1, 1), c(1, 1, 1), u), v), w);
+}
+
+/** Relief offset in mm (outward positive) at height t and angle θ for a wall of base radius R. */
+function relief(d: Design, t: number, th: number, R: number): number {
+  const rl = d.relief;
+  if (rl.kind === 'smooth' || rl.depth === 0) return 0;
+  const tr = Math.max(1e-3, rl.transition);
+  const band = clamp((t - rl.start) / tr, 0, 1) * clamp((rl.end - t) / tr, 0, 1);
+  if (band <= 0) return 0;
+  const n = Math.max(1, Math.round(rl.count)), z = t * d.height;
+  const cell = (TAU * R) / n; // square cells: height = width
+  const u = (th / TAU) * n, v = z / Math.max(1, cell);
+  let f = 0;
+  switch (rl.kind) {
+    case 'ribbed': f = 0.5 + 0.5 * Math.cos(n * th); break;
+    case 'grooves': f = -(Math.max(0, Math.cos(n * th)) ** 4); break;
+    case 'fins': f = Math.max(0, Math.cos(n * th)) ** 12; break;
+    case 'rings': f = 0.5 + 0.5 * Math.cos(TAU * z / Math.max(1, d.height / n)); break;
+    case 'wavy': f = Math.sin(n * th + TAU * 3 * t); break;
+    case 'guilloche': f = 0.5 * (Math.sin(n * th + TAU * 5 * t) + Math.sin(n * th - TAU * 5 * t)); break;
+    case 'vwaves': f = Math.sin(n * th + 0.6 * Math.sin(TAU * z / 30)); break;
+    case 'bubbles': { const vv = v + (Math.floor(u) % 2) * 0.5; f = (Math.sin(Math.PI * frac(u)) * Math.sin(Math.PI * frac(vv))) ** 1.5; break; }
+    case 'bumps': f = Math.max(0, Math.sin(n * th) * Math.sin(TAU * z / Math.max(4, cell * 2))); break;
+    case 'pyramid': f = 1 - Math.max(Math.abs(2 * frac(u) - 1), Math.abs(2 * frac(v) - 1)); break;
+    case 'diamond': f = Math.max(0, 1 - Math.abs(2 * frac(u) - 1) - Math.abs(2 * frac(v) - 1)); break;
+    case 'hammered': { const s = n / 30 / 6; f = 2 * vnoise(Math.cos(th) * R * s, Math.sin(th) * R * s, z * s) - 1; break; }
+    case 'sand': { const s = n / 120; f = 2 * vnoise(Math.cos(th) * R * s, Math.sin(th) * R * s, z * s) - 1; break; }
+  }
+  return f * rl.depth * band;
+}
+
+function twistEase(d: Design, t: number) {
+  if (d.twistShape === 's') return t * t * (3 - 2 * t);
+  if (d.twistShape === 'wave') return Math.sin(Math.PI * t);
+  return t;
+}
+
+/** Radius (mm) of the outer wall at height z (mm) and angle θ (rad). The function every stage reads. */
+export function makeSurface(d: Design) {
+  const pts = sortedProfile(d), Rmax = d.maxDiameter / 2, tw = (d.twist * Math.PI) / 180;
+  return (z: number, th: number): number => {
+    const t = clamp(z / d.height, 0, 1);
+    const R = profileR(d, t, pts) * Rmax * (1 - d.narrowTop * t);
+    const a = th - tw * twistEase(d, t);
+    return Math.max(1, R * sectionMul(d, a) + relief(d, t, a, R));
+  };
+}
+
+/** Quick numbers for the estimate card (single-wall, spiral). */
+export function estimate(d: Design, lineWidth = 0.5, layer = 0.24, speed = 40) {
+  const surf = makeSurface(d);
+  let area = 0, maxR = 0, minR = Infinity;
+  const NZ = 60, NT = 180;
+  for (let i = 0; i < NZ; i++) {
+    const z = ((i + 0.5) / NZ) * d.height;
+    let per = 0, prev = surf(z, 0);
+    for (let j = 1; j <= NT; j++) { const th = (j / NT) * TAU, r = surf(z, th); per += Math.hypot(r * Math.cos(th) - prev * Math.cos(th - TAU / NT), r * Math.sin(th) - prev * Math.sin(th - TAU / NT)); prev = r; maxR = Math.max(maxR, r); minR = Math.min(minR, r); }
+    area += per * (d.height / NZ);
+  }
+  const pathLen = area / layer;
+  const vol = area * lineWidth + (d.openBottom ? 0 : Math.PI * (profileR(d, 0) * d.maxDiameter / 2) ** 2 * 1.2);
+  const grams = (vol / 1000) * 1.24;
+  const meters = vol / (Math.PI * 0.875 ** 2) / 1000;
+  const warnings: string[] = [];
+  const slope = overhang(d);
+  if (slope > 50) warnings.push(`Overhang reaches ${slope.toFixed(0)}°: above 45° the wall may sag.`);
+  if (d.relief.kind !== 'smooth' && d.relief.depth > d.wall * 1.5) warnings.push(`Relief ${d.relief.depth.toFixed(1)} mm is deep for a ${d.wall} mm wall.`);
+  if (minR < 8) warnings.push('The piece gets very narrow: the nozzle may not fit inside.');
+  return { maxDiameter: maxR * 2, seconds: pathLen / speed, grams, meters, warnings };
+}
+
+/** Worst outward overhang of the profile in degrees from vertical. */
+export function overhang(d: Design): number {
+  let worst = 0; const Rm = d.maxDiameter / 2;
+  for (let i = 1; i <= 100; i++) {
+    const t0 = (i - 1) / 100, t1 = i / 100;
+    const dr = (profileR(d, t1) * (1 - d.narrowTop * t1) - profileR(d, t0) * (1 - d.narrowTop * t0)) * Rm, dz = d.height / 100;
+    worst = Math.max(worst, (Math.atan2(dr, dz) * 180) / Math.PI);
+  }
+  return worst;
+}
+
+const pick = <T,>(a: readonly T[]) => a[Math.floor(Math.random() * a.length)];
+/** A random but printable piece in this family. */
+export function surprise(family: Family): Design {
+  const d = defaultDesign(family);
+  const outs = OUTLINES.filter((o) => o.families.includes(family));
+  const o = pick(outs);
+  d.outline = o.id; d.profile = structuredClone(o.pts); if (o.h) d.height = o.h; if (o.d) d.maxDiameter = o.d;
+  d.section = pick(SECTIONS).id; d.sides = 4 + Math.floor(Math.random() * 10); d.depth = 0.06 + Math.random() * 0.18;
+  if (Math.random() < 0.45) d.section = 'round';
+  d.twist = Math.random() < 0.5 ? 0 : Math.round(Math.random() * 18) * 10; d.twistShape = pick(['linear', 's', 'wave'] as const);
+  const r = pick(RELIEFS); d.relief = { ...d.relief, kind: r.id, count: r.count, depth: r.depth };
+  for (let k = 0; k < 6 && overhang(d) > 50; k++) d.height *= 1.15;
+  return d;
+}

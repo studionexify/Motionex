@@ -182,7 +182,7 @@ export default function App() {
         {workspace === 'device' && <DevicePage />}
         {workspace === 'project' && <ProjectPage />}
         {workspace === 'calibration' && <CalibrationPage />}
-        {!is3d && <div className={`float sh-modes-float${workspace === 'workbench' ? ' sh-modes-wb' : ''}`}><ModeTabs /></div>}
+        {!is3d && workspace !== 'workbench' && <div className="float sh-modes-float"><ModeTabs /></div>}
       </div>
       <Toast />
       <HolderPromptHost />
