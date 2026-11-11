@@ -150,6 +150,25 @@ function vnoise(x: number, y: number, z: number) {
 }
 
 /** Relief offset in mm (outward positive) at height t and angle θ for a wall of base radius R. */
+/** Cumulative cell rows from the base up to height fraction t: ∫ n / (2πR) · ds along the side profile. Cached per shape. */
+let rowKey = '', rowTab: Float64Array = new Float64Array(0);
+function cellRows(d: Design, t: number, n: number): number {
+  const key = `${d.height}|${d.maxDiameter}|${d.narrowTop}|${d.smoothing}|${n}|${JSON.stringify(d.profile)}`;
+  const N = 1024;
+  if (key !== rowKey) {
+    rowKey = key; rowTab = new Float64Array(N + 1);
+    const pts = sortedProfile(d), Rmax = d.maxDiameter / 2, dz = d.height / N;
+    const Rat = (tt: number) => profileR(d, tt, pts) * Rmax * (1 - d.narrowTop * tt);
+    let acc = 0, prevR = Rat(0);
+    for (let i = 1; i <= N; i++) {
+      const R1 = Rat(i / N), ds = Math.hypot(dz, R1 - prevR), Rm = Math.max(1, (R1 + prevR) / 2);
+      acc += ds * n / (TAU * Rm); rowTab[i] = acc; prevR = R1;
+    }
+  }
+  const x = clamp(t, 0, 1) * N, i = Math.min(N - 1, Math.floor(x)), f = x - i;
+  return rowTab[i] + (rowTab[i + 1] - rowTab[i]) * f;
+}
+
 export function relief(d: Design, t: number, th: number, R: number): number {
   const rl = d.relief;
   if (rl.kind === 'smooth' || rl.depth === 0) return 0;
@@ -158,7 +177,8 @@ export function relief(d: Design, t: number, th: number, R: number): number {
   if (band <= 0) return 0;
   const n = Math.max(1, Math.round(rl.count)), z = t * d.height;
   const cell = (TAU * R) / n; // square cells: height = width
-  const u = (th / TAU) * n, v = z / Math.max(1, cell);
+  // v = true surface distance up the side measured in local cell widths, so cells stay square (circles stay round)
+  const u = (th / TAU) * n, v = cellRows(d, t, n);
   let f = 0;
   switch (rl.kind) {
     case 'ribbed': f = 0.5 + 0.5 * Math.cos(n * th); break;
@@ -168,8 +188,8 @@ export function relief(d: Design, t: number, th: number, R: number): number {
     case 'wavy': f = Math.sin(n * th + TAU * 3 * t); break;
     case 'guilloche': f = 0.5 * (Math.sin(n * th + TAU * 5 * t) + Math.sin(n * th - TAU * 5 * t)); break;
     case 'vwaves': f = Math.sin(n * th + 0.6 * Math.sin(TAU * z / 30)); break;
-    case 'bubbles': { const vv = v + (Math.floor(u) % 2) * 0.5; f = (Math.sin(Math.PI * frac(u)) * Math.sin(Math.PI * frac(vv))) ** 1.5; break; }
-    case 'bumps': f = Math.max(0, Math.sin(n * th) * Math.sin(TAU * z / Math.max(4, cell * 2))); break;
+    case 'bubbles': { const row = Math.floor(v); const x = frac(u + (row % 2) * 0.5) - 0.5, y = frac(v) - 0.5; const r = Math.hypot(x, y) / 0.44; f = r < 1 ? Math.sqrt(1 - r * r) : 0; break; }
+    case 'bumps': { const vv = v / 2, row = Math.floor(vv); const x = frac(u + (row % 2) * 0.5) - 0.5, y = (frac(vv) - 0.5) * 2; const r = Math.hypot(x, y * 0.5) / 0.46; f = r < 1 ? Math.sqrt(1 - r * r) : 0; break; }
     case 'pyramid': f = 1 - Math.max(Math.abs(2 * frac(u) - 1), Math.abs(2 * frac(v) - 1)); break;
     case 'diamond': f = Math.max(0, 1 - Math.abs(2 * frac(u) - 1) - Math.abs(2 * frac(v) - 1)); break;
     case 'hammered': { const s = n / 30 / 6; f = 2 * vnoise(Math.cos(th) * R * s, Math.sin(th) * R * s, z * s) - 1; break; }

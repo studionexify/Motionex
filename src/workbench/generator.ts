@@ -147,17 +147,28 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
   if (s.spiral && walls > 1) warnings.push(`Spiral vase needs a single-line wall: this ${design.wall} mm wall prints as ${walls} lines per layer, so it is sliced layer by layer.`);
   const innerRaw = makeInner(design);
   const inner = s.flip ? (z: number, th: number) => innerRaw(H - z, th) : innerRaw;
-  /** Centre line of wall line k (0 = outer): from the outer surface to the inner surface. */
+  /** Wall line k (0 = outer) as a real slicer lays it out: the outer half of the lines follows the outer face,
+   *  the inner half follows the inner face, and the middle line widens or narrows (flow) to fill what is left,
+   *  so each face keeps its exact shape and no half-strength copy of the relief appears in between. */
+  const wallFlow: number[][] = [];
   const wallLoop = (zz: number, nn: number, k: number): [number, number][] => {
-    const w = s.lineWidth, out: [number, number][] = [];
+    const w = s.lineWidth, out: [number, number][] = [], fl: number[] = [];
+    const m = Math.ceil(walls / 2);            // lines 0..m-1 hug the outer face
     for (let i = 0; i < nn; i++) {
-      const th = (i / nn) * TAU, ro = surf(zz, th), ri = inner(zz, th);
-      const a = ro - w / 2, b = Math.min(a, ri + w / 2);
-      const r = walls === 1 ? a : a + (b - a) * (k / (walls - 1));
+      const th = (i / nn) * TAU, ro = surf(zz, th), ri = walls === 1 ? ro - w : inner(zz, th);
+      let r = ro - w / 2, f = 1;
+      if (walls > 1) {
+        const gap = (ro - ri) - walls * w;     // + : extra room, − : squeezed (relief cuts in)
+        if (k < m) r = ro - w / 2 - k * w; else r = ri + w / 2 + (walls - 1 - k) * w;
+        if (k === m - 1 || k === m) { r += (k === m - 1 ? -1 : 1) * gap / 4; f = Math.min(2.5, Math.max(0.15, 1 + gap / (2 * w))); }
+      }
+      fl.push(f);
       out.push([Math.max(0.3, r) * Math.cos(th), Math.max(0.3, r) * Math.sin(th)]);
     }
+    wallFlow[k] = fl;
     return out;
   };
+
   const isBaseLayer = (li: number) => li < baseOn;
   const baseOn = !design.openBottom && !s.flip ? s.baseLayers : design.openBottom ? 0 : s.baseLayers;
   for (let li = 0; li < nLayers; li++) {
@@ -236,6 +247,7 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
         const nx = ty, ny = -tx;
         let ox = 0, oy = 0, oz = 0, flow = 1, sp = 1;
         let moving = false;
+        const wf = wallFlow[k]?.[i % n] ?? 1;
         if (brush && fade > 0 && zOnK) {
           const u = frac(along * reps + phase);
           const lat = evalCurve(brush.curves.lateral_offset, u) * amp * fade, al = evalCurve(brush.curves.along_offset, u) * amp * fade;
@@ -277,7 +289,7 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
         const zz = spiralNow ? zTop - h + h * along : zTop;
         const px = cx + p[0] + ox, py = cy + p[1] + oy, pz = Math.max(0.05, zz + oz);
         if (i === 0) { travel(px, py, spiralNow ? z : zTop); continue; }
-        extrude(px, py, pz, h, s.lineWidth, speed * sp, flow, k > 0 ? 'inner' : moving ? 'motion' : 'wall');
+        extrude(px, py, pz, h, s.lineWidth, speed * sp, flow * wf, k > 0 ? 'inner' : moving ? 'motion' : 'wall');
       }
     }
     curRuled = false; curRule = -1;

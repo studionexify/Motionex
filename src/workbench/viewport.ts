@@ -81,7 +81,7 @@ export class StudioView {
   private highlight: ((z: number, a: number, r: number) => [number, number, number] | null) | null = null;
   private ruledMask: Uint8Array | null = null;
   showModel = true; showToolpath = false; maxLayer = Infinity; colorBy: ColorBy = 'feature'; style: PathStyle = 'ribbons'; tubeWindow = 40; flip = false;
-  pathColors = { wall: '#d8c46c', motion: '#ff7a2f', base: '#46b98e', inner: '#9aa4b2', top: '#4fa3d9' };
+  pathColors = { wall: '#d9d2bb', motion: '#ff4d0a', base: '#46b98e', inner: '#a9b0bb', top: '#4fa3d9' };
   /** Line kinds drawn and pickable (NexSpiro "Show lines"). */
   visible = { outer: true, inner: true, base: true, top: true };
   /** Rule colours by rule index, for the 'rules' colour mode. */
@@ -285,7 +285,7 @@ export class StudioView {
     const r = this.result!, s = r.segs[i], sim = this.sim;
     switch (this.colorBy) {
       case 'feature': c.set(this.pathColors[s.kind === 'travel' ? 'inner' : s.kind]); return;
-      case 'rules': if (s.rule >= 0 && this.ruleColors[s.rule]) c.set(this.ruleColors[s.rule]); else { c.set(this.pathColors[s.kind === 'travel' ? 'inner' : s.kind]); c.lerp(new THREE.Color('#c9ccd2'), 0.75); } return;
+      case 'rules': if (s.rule >= 0 && this.ruleColors[s.rule]) c.set(this.ruleColors[s.rule]); else if (s.kind === 'motion') c.set(this.pathColors.motion); else { c.set(this.pathColors[s.kind === 'travel' ? 'inner' : s.kind]); c.lerp(new THREE.Color('#d4d7dc'), 0.7); } return;
       case 'speed': ramp((sim ? sim.speed[i] : s.speed) / ranges.sp, c); return;
       case 'height': ramp(s.z / ranges.z, c); return;
       case 'width': case 'flow': {

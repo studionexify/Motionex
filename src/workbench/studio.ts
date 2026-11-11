@@ -268,12 +268,14 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   function updateTop() {
     undoB.disabled = !past.length; redoB.disabled = !future.length;
     if (document.activeElement !== nameIn) nameIn.value = S.design.name;
-    steps.innerHTML = '';
-    for (const [id, label, ic] of [['design', 'Design', 'design'], ['motion', 'Motion', 'motion'], ['slice', 'Slice', 'slice']] as const) {
-      const b = h('button', { role: 'tab', class: `mxs-step${S.step === id ? ' on' : ''}`, 'aria-selected': String(S.step === id) }, icon(ic, 16), h('span', {}, label));
-      if (id === 'slice' && result && stale) b.append(h('i', { class: 'mxs-dot', title: 'Changed since last slice' }));
+    if (!steps.childElementCount) for (const [id, label, ic] of [['design', 'Design', 'design'], ['motion', 'Motion', 'motion'], ['slice', 'Slice', 'slice']] as const) {
+      const b = h('button', { role: 'tab', class: 'mxs-step', 'data-step': id }, icon(ic, 16), h('span', {}, label), h('i', { class: 'mxs-dot', title: 'Changed since last slice', hidden: true }));
       b.onclick = () => { S.step = id; S.rail = 'studio'; renderAll(); };
       steps.append(b);
+    }
+    for (const b of steps.querySelectorAll<HTMLButtonElement>('.mxs-step')) {
+      const on = b.dataset.step === S.step; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on));
+      (b.querySelector('.mxs-dot') as HTMLElement).hidden = !(b.dataset.step === 'slice' && result && stale);
     }
     surpriseB.hidden = S.step !== 'design';
   }

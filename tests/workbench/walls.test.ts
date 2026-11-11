@@ -25,3 +25,17 @@ describe('thick walls', () => {
     expect(r.stats.lengthMm).not.toBe(plain.stats.lengthMm);
   });
 });
+
+describe('wall line layout', () => {
+  it('outer lines carry the full relief, inner lines stay on the smooth inner face', () => {
+    const d = { ...base(), wall: 2.5, relief: { kind: 'ribbed', count: 12, depth: 1.2, start: 0, end: 1, transition: 0.001 } };
+    const r = slice(d, { ...DEFAULT_SLICE, baseLayers: 0, spiral: false }, [], brush);
+    const L = 10, segs = r.segs.slice(r.layerStart[L], r.layerStart[L + 1]).filter((g) => g.kind !== 'travel');
+    const rad = (g: { x: number; y: number }) => Math.hypot(g.x - 128, g.y - 128);
+    const outer = segs.filter((g) => g.kind === 'wall'), inner = segs.filter((g) => g.kind === 'inner');
+    const spread = (a: number[]) => Math.max(...a) - Math.min(...a);
+    expect(spread(outer.map(rad))).toBeGreaterThan(1.1);
+    const innermost = inner.slice(0, Math.floor(inner.length / 4));   // first printed = innermost line
+    expect(spread(innermost.map(rad))).toBeLessThan(0.05);
+  });
+});
