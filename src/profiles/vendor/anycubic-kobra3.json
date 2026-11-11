@@ -1,0 +1,135 @@
+{
+ "vendor": "OrcaSlicer (Anycubic profile)",
+ "repo": "SoftFever/OrcaSlicer",
+ "commit": "10c9df35782e641a9fd9500a63bdc65946fcc4af",
+ "profile": "resources/profiles/Anycubic/machine/Anycubic Kobra 3 0.4 nozzle.json",
+ "templates": {
+  "machine_start_gcode": "G9111 bedTemp=[first_layer_bed_temperature] extruderTemp=[first_layer_temperature[initial_tool]]\nM117\nM900 K0.051",
+  "machine_end_gcode": "M400\nG92 E0 ; zero the extruder\nG1 E-2 F3600\n{if max_layer_z < max_print_height-1}G1 Z{max_layer_z+2} F900 ; Move print head further up{endif}\nG1 X250 Y220 F12000 ; present print\nM140 S0 ; turn off heatbed\nM104 S0 ; turn off temperature\nM107;turn off fan\nM84; disable stepper motors",
+  "before_layer_change_gcode": "; BEFORE_LAYER_CHANGE [layer_num] @ [layer_z]mm",
+  "layer_change_gcode": "; AFTER_LAYER_CHANGE [layer_num] @ [layer_z]mm",
+  "machine_pause_gcode": "M601"
+ },
+ "inherits": [
+  "Anycubic Kobra 3 0.4 nozzle",
+  "fdm_machine_common"
+ ],
+ "head_wrap_detect_zone": null,
+ "flavor": "klipper",
+ "bed": {
+  "x": 255.0,
+  "y": 255.0,
+  "z": 260
+ },
+ "bed_origin": [
+  0.0,
+  0.0
+ ],
+ "excluded_areas": [
+  [
+   [
+    0.0,
+    0.0
+   ],
+   [
+    255.0,
+    0.0
+   ],
+   [
+    255.0,
+    255.0
+   ],
+   [
+    0.0,
+    255.0
+   ]
+  ],
+  [
+   [
+    2.0,
+    2.0
+   ],
+   [
+    2.0,
+    253.0
+   ],
+   [
+    253.0,
+    253.0
+   ],
+   [
+    253.0,
+    2.0
+   ]
+  ]
+ ],
+ "machine": {
+  "retraction_length": 1,
+  "retraction_speed": 60,
+  "deretraction_speed": 60,
+  "z_hop": 0.4,
+  "retract_lift_below": 259.6,
+  "retract_lift_above": 0.3,
+  "retraction_minimum_travel": 1,
+  "wipe_distance": 2,
+  "retract_before_wipe": 0,
+  "retract_length_toolchange": 0,
+  "retract_restart_extra": 0,
+  "retract_restart_extra_toolchange": 0,
+  "min_layer_height": 0.08,
+  "max_layer_height": 0.28,
+  "extruder_clearance_max_radius": 130,
+  "extruder_clearance_height_to_rod": 30,
+  "extruder_clearance_height_to_lid": 200,
+  "max_speed_z": 10,
+  "wipe": true,
+  "retract_when_changing_layer": true,
+  "auxiliary_fan": false,
+  "support_air_filtration": true,
+  "support_chamber_temp_control": true,
+  "use_relative_e_distances": true,
+  "use_firmware_retraction": false,
+  "z_hop_types": "auto",
+  "max_speed_xy": 600,
+  "max_acceleration": 15000,
+  "machine_max_speed_x": 600,
+  "machine_max_speed_y": 600,
+  "machine_max_speed_e": 80,
+  "machine_max_acceleration_x": 15000,
+  "machine_max_acceleration_y": 15000,
+  "machine_max_acceleration_z": 5000,
+  "machine_max_acceleration_e": 20000,
+  "machine_max_acceleration_extruding": 20000,
+  "machine_max_acceleration_retracting": 20000,
+  "machine_max_acceleration_travel": 20000,
+  "machine_max_jerk_x": 20,
+  "machine_max_jerk_y": 20,
+  "machine_max_jerk_z": 5,
+  "machine_max_jerk_e": 10,
+  "machine_min_extruding_rate": 0,
+  "machine_min_travel_rate": 0,
+  "nozzle_height": 4,
+  "nozzle_volume": 58.7795,
+  "machine_load_filament_time": 42,
+  "machine_unload_filament_time": 0,
+  "cooling_tube_length": 0,
+  "cooling_tube_retraction": 0,
+  "parking_pos_retraction": 0,
+  "extra_loading_move": 0,
+  "high_current_on_filament_swap": 0,
+  "scan_first_layer": 0,
+  "thumbnails": "230x110",
+  "thumbnails_format": "PNG",
+  "printer_structure": "i3",
+  "printer_variant": "0.4",
+  "host_type": "octoprint",
+  "nozzle_type": "brass",
+  "emit_machine_limits_to_gcode": true,
+  "bed_custom_texture": "",
+  "manual_filament_change": false,
+  "single_extruder_multi_material": true,
+  "purge_in_prime_tower": false,
+  "enable_filament_ramming": false
+ },
+ "template_vars": {}
+}

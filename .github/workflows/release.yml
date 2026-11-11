@@ -1,0 +1,91 @@
+# Builds the Windows installer and setup zip (macOS/Linux builds are off for now).
+# - Every run uploads the installers as workflow artifacts (Actions tab → run → Artifacts).
+# - Pushing a tag like v0.1.0 also publishes them on the repository's Releases page.
+name: Desktop installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # Create the release once, before the build uploads into it (avoids racing duplicates).
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "tag=$GITHUB_REF_NAME" >> $GITHUB_OUTPUT
+          else node -e "console.log('tag=v'+require('./package.json').version)" >> $GITHUB_OUTPUT; fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # GitHub release downloads (Electron, NSIS) intermittently return 504:
+      # cache them and retry with backoff.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-dl-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-dl-${{ runner.os }}-
+      - name: npm ci (with retry)
+        shell: bash
+        run: |
+          for i in 1 2 3 4; do
+            npm ci && exit 0
+            echo "npm ci attempt $i failed; retrying"; sleep $((i*30))
+          done
+          exit 1
+      # tests run on every push in ci.yml; skipped here to keep installer builds fast
+      - run: npm run build
+      - name: electron-builder (with retry)
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          for i in 1 2 3 4; do
+            npx electron-builder ${{ matrix.target }} --publish never && exit 0
+            echo "electron-builder attempt $i failed; retrying"; sleep $((i*30))
+          done
+          exit 1
+      - if: runner.os == 'Windows'
+        run: node scripts/package-win.mjs
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true # artifact storage can be full; tagged builds still publish to Releases
+        with:
+          name: NexSpiro-${{ runner.os }}
+          path: |
+            release/*.exe
+            release/*-Windows.zip
+          if-no-files-found: error
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            release/*.exe
+            release/*-Windows.zip

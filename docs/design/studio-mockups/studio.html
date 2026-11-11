@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Studio Mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+/* Plugin Studio shell — mockup. Tokens copied from src/styles.css (NexSpiro design system v2). */
+:root{
+  --ns-canvas-a:#F3F4F6;--ns-canvas-b:#E5E7EB;--ns-grid:#D1D5DB;--ns-plate:#FBFBFC;
+  --ns-panel:#FFFFFF;--ns-panel-2:#F7F7F8;--ns-line:#E4E4E7;
+  --ns-text:#18181B;--ns-text-2:#52525B;--ns-text-3:#A1A1AA;
+  --ns-active:#18181B;--ns-on-active:#fff;
+  --ns-primary:#2563EB;--ns-primary-soft:#EFF4FF;
+  --ns-ok:#10B981;--ns-warn:#F59E0B;--ns-err:#EF4444;
+  --ns-shadow:0 4px 20px -2px rgba(0,0,0,.06);
+  --ns-shadow-lg:0 24px 60px -12px rgba(0,0,0,.25);
+  --r-o:12px;--r-i:8px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:linear-gradient(160deg,var(--ns-canvas-a),var(--ns-canvas-b));color:var(--ns-text);font:400 12px/1.45 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+.mono{font-family:'JetBrains Mono',monospace}
+button{font:inherit;color:inherit}
+
+/* window */
+.studio{position:absolute;inset:16px;display:grid;grid-template-columns:264px 1fr;gap:12px}
+.studio.collapsed{grid-template-columns:64px 1fr}
+.side{display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.brandcard{background:var(--ns-panel);border-radius:var(--r-o);box-shadow:var(--ns-shadow);padding:12px 14px}
+.brandrow{display:flex;align-items:center;gap:8px}
+.logo{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px}
+.bname{font-weight:700;font-size:15px;letter-spacing:.2px}
+.bname small{font-weight:500;font-size:10px;letter-spacing:1.6px;color:var(--ns-text-3);margin-left:4px}
+.iconbtn{width:24px;height:24px;border:0;background:transparent;border-radius:6px;display:grid;place-items:center;color:var(--ns-text-2);cursor:pointer}
+.iconbtn:hover{background:rgba(0,0,0,.05)}
+.iconbtn.on{background:var(--ns-active);color:#fff}
+.meta{color:var(--ns-text-3);font-size:10.5px;margin-top:6px;display:flex;gap:10px}
+.meta a{color:var(--ns-text-2);text-decoration:underline;text-underline-offset:2px}
+.card{background:var(--ns-panel);border-radius:var(--r-o);box-shadow:var(--ns-shadow);padding:10px 14px 12px}
+.card h3{margin:0 0 8px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:space-between}
+.card h3 .chev{color:var(--ns-text-3);font-size:10px}
+.card.closed{padding-bottom:10px}
+.card.closed h3{margin:0}
+.row{display:flex;align-items:center;gap:6px;margin:6px 0;color:var(--ns-text-2)}
+.row label{min-width:62px}
+.num{width:46px;height:24px;border:1px solid var(--ns-line);border-radius:6px;padding:0 6px;display:flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ns-text);background:var(--ns-panel)}
+.num.mod{border-color:var(--ns-warn);background:#FFFBEB}
+.unit{color:var(--ns-text-3);white-space:nowrap}
+.x{color:var(--ns-text-3);margin:0 2px}
+.sel{height:24px;border:1px solid var(--ns-line);border-radius:6px;padding:0 6px 0 8px;display:inline-flex;align-items:center;gap:6px;color:var(--ns-text);background:var(--ns-panel)}
+.sel::after{content:'';width:6px;height:6px;border-right:1.5px solid var(--ns-text-2);border-bottom:1.5px solid var(--ns-text-2);transform:rotate(45deg) translate(-2px,-2px)}
+.field{width:100%;height:26px;border:1px solid var(--ns-line);border-radius:6px;padding:0 8px;display:flex;align-items:center;color:var(--ns-text)}
+.btn{height:26px;padding:0 10px;border:1px solid var(--ns-line);border-radius:6px;background:var(--ns-panel);display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.btn.primary{background:var(--ns-primary);border-color:var(--ns-primary);color:#fff;font-weight:600}
+.btns{display:flex;gap:6px;align-items:center;margin-top:8px}
+.status{font-size:10.5px;color:var(--ns-text-3);text-align:right;margin-top:6px}
+.status b{color:var(--ns-warn);font-weight:500}
+.stepper{display:inline-flex;align-items:center;gap:4px}
+.stepper span{width:20px;height:20px;border-radius:5px;display:grid;place-items:center;color:var(--ns-text-2);font-size:14px}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:4px}
+.tile{border:1px solid var(--ns-line);border-radius:7px;padding:4px 2px 3px;text-align:center;font-size:10px;color:var(--ns-text-2);background:var(--ns-panel)}
+.tile svg{display:block;margin:0 auto 2px}
+.tile.on{border-color:var(--ns-active);box-shadow:0 0 0 1px var(--ns-active);color:var(--ns-text)}
+.seg{display:inline-flex;border:1px solid var(--ns-line);border-radius:6px;overflow:hidden}
+.seg span{padding:3px 8px;font-size:11px;color:var(--ns-text-2)}
+.seg span.on{background:var(--ns-active);color:#fff}
+.fil{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--ns-line)}
+.fil:first-of-type{border-top:0}
+.fil .idx{width:14px;color:var(--ns-text-3);font-family:'JetBrains Mono',monospace;font-size:10.5px}
+.sw{width:34px;height:34px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.fil .txt{flex:1;line-height:1.25}
+.fil .txt small{display:block;color:var(--ns-text-3);font-size:10px}
+.fil .txt b{font-weight:600;font-size:11.5px}
+.fil .acts{display:flex;flex-direction:column;gap:2px;color:var(--ns-text-3);font-size:11px}
+.hint{font-size:10.5px;color:var(--ns-text-3);margin-top:6px}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:2px 7px;border-radius:999px;background:#ECFDF5;color:#047857}
+.badge.warn{background:#FFFBEB;color:#B45309}
+
+/* main */
+.main{position:relative;display:grid;grid-template-rows:1fr auto;gap:12px;min-width:0}
+.stage{position:relative;background:var(--ns-panel);border-radius:var(--r-o);box-shadow:var(--ns-shadow);overflow:hidden}
+.stage .bg{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,#fff 0%,#F4F4F6 70%)}
+.stage svg.view{position:absolute;inset:0;width:100%;height:100%}
+.avatar{position:absolute;right:14px;top:12px;width:24px;height:24px;border-radius:50%;background:#7C3AED;color:#fff;display:grid;place-items:center;font-weight:600;font-size:11px}
+.tabs{position:absolute;left:14px;top:12px;display:flex;gap:4px;background:var(--ns-panel-2);padding:3px;border-radius:8px;border:1px solid var(--ns-line)}
+.tabs span{padding:4px 10px;border-radius:6px;color:var(--ns-text-2);font-weight:500}
+.tabs span.on{background:var(--ns-panel);color:var(--ns-text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.toolbar{position:absolute;display:flex;align-items:flex-end;gap:14px;background:var(--ns-panel);border:1px solid var(--ns-line);border-radius:10px;box-shadow:var(--ns-shadow);padding:6px 12px 7px}
+.toolbar .ttl{font-weight:600;font-size:13px;align-self:center;margin-right:2px}
+.grp{display:flex;flex-direction:column;gap:3px}
+.grp>small{font-size:9.5px;color:var(--ns-text-3);letter-spacing:.2px;padding-left:2px}
+.grp>div{display:flex;align-items:center;gap:3px}
+.vsep{width:1px;align-self:stretch;background:var(--ns-line)}
+.live{position:absolute;left:14px;bottom:14px;display:flex;gap:8px;align-items:center;color:var(--ns-text-2);font-size:11px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ns-ok);box-shadow:0 0 0 3px rgba(16,185,129,.18)}
+.stats{position:absolute;right:14px;top:48px;display:flex;flex-direction:column;gap:6px}
+.stat{background:rgba(255,255,255,.9);border:1px solid var(--ns-line);border-radius:8px;padding:6px 10px;min-width:128px}
+.stat small{display:block;color:var(--ns-text-3);font-size:10px}
+.stat b{font-family:'JetBrains Mono',monospace;font-weight:500;font-size:12px}
+
+.editor{position:relative;background:var(--ns-panel);border-radius:var(--r-o);box-shadow:var(--ns-shadow);height:300px;overflow:hidden}
+.editor .head{display:flex;align-items:flex-end;gap:14px;padding:8px 12px 8px;border-bottom:1px solid var(--ns-line)}
+.editor .grip{color:var(--ns-text-3);align-self:center;letter-spacing:-2px}
+.editor .body{position:absolute;left:0;right:0;top:52px;bottom:0}
+.paintsel{display:inline-flex;align-items:center;gap:6px;height:24px;border:1px solid var(--ns-line);border-radius:6px;padding:0 8px 0 3px;min-width:150px}
+.paintsel i{width:18px;height:18px;border-radius:4px;color:#fff;font-style:normal;font-size:10px;display:grid;place-items:center;font-family:'JetBrains Mono',monospace}
+
+/* annotations */
+.note{position:absolute;z-index:20;background:#18181B;color:#fff;font-size:11px;line-height:1.35;padding:6px 9px;border-radius:7px;max-width:220px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
+.note b{color:#93C5FD;font-weight:600}
+.note .n{display:inline-grid;place-items:center;width:16px;height:16px;border-radius:50%;background:var(--ns-primary);font-size:10px;font-weight:700;margin-right:5px}
+.pin{position:absolute;z-index:21;width:18px;height:18px;border-radius:50%;background:var(--ns-primary);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;box-shadow:0 0 0 3px rgba(37,99,235,.25)}
+
+/* popover / modal */
+.pop{position:absolute;z-index:15;background:var(--ns-panel);border:1px solid var(--ns-line);border-radius:8px;box-shadow:var(--ns-shadow-lg);padding:4px;min-width:170px}
+.pop div{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px}
+.pop div.on{background:var(--ns-panel-2)}
+.pop i{width:16px;height:16px;border-radius:4px;color:#fff;font-style:normal;font-size:9.5px;display:grid;place-items:center;font-family:'JetBrains Mono',monospace}
+.modal{position:absolute;z-index:12;background:var(--ns-panel);border:1px solid var(--ns-line);border-radius:12px;box-shadow:var(--ns-shadow-lg)}
+.scrim{position:absolute;inset:0;background:rgba(24,24,27,.04);z-index:11}
+.search{display:flex;align-items:center;gap:6px;height:28px;border:1px solid var(--ns-line);border-radius:7px;padding:0 10px;color:var(--ns-text-3);flex:1}
+.libgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:12px;padding:14px 16px}
+.spool{text-align:center;font-size:10px;color:var(--ns-text-2);line-height:1.25}
+.spool .s{aspect-ratio:1;border-radius:9px;margin-bottom:4px;position:relative;box-shadow:inset 0 0 0 1px rgba(0,0,0,.07)}
+.spool .s::after{content:'';position:absolute;inset:32%;border-radius:50%;background:rgba(255,255,255,.55);box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.spool.on .s{box-shadow:0 0 0 2px var(--ns-panel),0 0 0 4px var(--ns-primary)}
+.spool small{color:var(--ns-text-3)}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--ns-line);border-radius:999px;font-size:11px;color:var(--ns-text-2)}
+.chip.on{background:var(--ns-active);color:#fff;border-color:var(--ns-active)}
+
+/* rail (collapsed) */
+.rail{background:var(--ns-panel);border-radius:var(--r-o);box-shadow:var(--ns-shadow);display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0}
+.rail .sw{width:30px;height:30px}
+.rail small{font-size:9.5px;color:var(--ns-text-3)}
+
+/* anatomy page */
+.sheet{position:absolute;inset:0;padding:28px 34px;overflow:hidden}
+.sheet h1{margin:0;font-size:22px;letter-spacing:-.2px}
+.sheet h1+p{margin:4px 0 18px;color:var(--ns-text-2);font-size:13px}
+.cols{display:grid;grid-template-columns:1.05fr 1fr;gap:22px}
+.panel{background:var(--ns-panel);border-radius:var(--r-o);box-shadow:var(--ns-shadow);padding:16px 18px}
+.panel h2{margin:0 0 10px;font-size:14px}
+.rules{margin:0;padding:0;list-style:none;display:grid;gap:9px}
+.rules li{display:grid;grid-template-columns:22px 1fr;gap:8px;color:var(--ns-text-2);font-size:12px}
+.rules li b{color:var(--ns-text)}
+.rules .k{width:20px;height:20px;border-radius:50%;background:var(--ns-primary-soft);color:var(--ns-primary);font-weight:700;font-size:10.5px;display:grid;place-items:center}
+table{width:100%;border-collapse:collapse;font-size:11.5px}
+th{text-align:left;color:var(--ns-text-3);font-weight:500;font-size:10.5px;padding:6px 8px;border-bottom:1px solid var(--ns-line)}
+td{padding:7px 8px;border-bottom:1px solid var(--ns-line);color:var(--ns-text-2);vertical-align:top}
+td:first-child{color:var(--ns-text);font-weight:600;white-space:nowrap}
+.wire{position:relative;height:250px;border:1px dashed var(--ns-grid);border-radius:10px;background:var(--ns-panel-2)}
+.wire div{position:absolute;border-radius:7px;display:grid;place-items:center;font-size:11px;font-weight:600;color:var(--ns-text-2);text-align:center;line-height:1.3}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const page = new URLSearchParams(location.search).get('page') || 'motionex';
+const annotate = new URLSearchParams(location.search).get('notes') !== '0';
+const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content.firstChild; };
+const ic = {
+  fit:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg>',
+  undo:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 4L2 7l3 3"/><path d="M2 7h8a4 4 0 010 8H7"/></svg>',
+  redo:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4"><path d="M11 4l3 3-3 3"/><path d="M14 7H6a4 4 0 000 8h3"/></svg>',
+  sel:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2"><rect x="2" y="3" width="12" height="10" rx="1"/></svg>',
+  pen:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 13l1-4 7-7 3 3-7 7-4 1z"/></svg>',
+  fill:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8l5-5 5 5-5 5z"/><path d="M13 11c0 1 1 2 1 3a1 1 0 01-2 0c0-1 1-2 1-3z" fill="currentColor"/></svg>',
+  node:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 12C5 2 11 14 14 4"/><rect x="6.5" y="6.5" width="3" height="3" fill="currentColor"/></svg>',
+  smooth:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 10c2-6 4-6 6 0s4 6 6 0"/></svg>',
+  mirror:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v12" stroke-dasharray="2 2"/><path d="M6 4L2 12h4zM10 4l4 8h-4z"/></svg>',
+  rot:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 8a5 5 0 11-1.5-3.5"/><path d="M12 2v3h-3"/></svg>',
+  col:'<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2l8 6-8 6"/></svg>',
+  edit:'✎', x:'✕', more:'⋮',
+};
+const ib = (k, on) => `<span class="iconbtn ${on ? 'on' : ''}">${ic[k]}</span>`;
+
+/* ---------------- shared data ---------------- */
+const FIL = [
+  { n: 1, name: 'Ivory White', brand: 'Bambu Lab · PLA Matte', hex: '#F1EEE6' },
+  { n: 2, name: 'Marsala Red', brand: 'Bambu Lab · PLA Matte', hex: '#8E1B2C' },
+  { n: 3, name: 'Ocean Teal', brand: 'Polymaker · PolyTerra', hex: '#1F6F78' },
+];
+// Patternex chart motif: 12 x 18, values 1..3, 0 = no change (base)
+const MOTIF = (() => {
+  const W = 12, H = 18, g = [];
+  for (let r = 0; r < H; r++) { const row = []; for (let c = 0; c < W; c++) {
+    let v = 1;
+    if (r === 1 || r === 16) v = 2;
+    const cx = Math.abs(((c + 0.5) % 12) - 6), dy = Math.abs(r - 8.5);
+    if (r > 2 && r < 15 && Math.abs(cx + dy - 5.5) < 0.6) v = 2;
+    if (r > 2 && r < 15 && cx + dy < 2.2) v = 3;
+    if ((r === 4 || r === 13) && (c % 12 === 0 || c % 12 === 11)) v = 3;
+    row.push(v);
+  } g.push(row); }
+  return g;
+})();
+
+/* ---------------- render helpers ---------------- */
+function vaseProfile(t) { // t: 0 bottom..1 top -> radius factor
+  return 0.62 + 0.38 * Math.sin(Math.PI * (0.18 + 0.72 * t)) - 0.1 * t;
+}
+function waveVase({ W, H, cx, top, bottom, rmax, amp, len, lead, layers = 90, color = '#E9E6DF', shade = '#B9B4AA', top3d = true }) {
+  let out = '';
+  const defs = `<defs><linearGradient id="cyl" x1="0" x2="1"><stop offset="0" stop-color="#000" stop-opacity=".28"/><stop offset=".35" stop-color="#000" stop-opacity="0"/><stop offset=".62" stop-color="#fff" stop-opacity=".25"/><stop offset="1" stop-color="#000" stop-opacity=".35"/></linearGradient></defs>`;
+  out += defs;
+  // body silhouette
+  const N = 60; let L = [], R = [];
+  for (let i = 0; i <= N; i++) { const t = i / N, y = bottom - (bottom - top) * t, r = rmax * vaseProfile(t); L.push([cx - r, y]); R.push([cx + r, y]); }
+  // shadow
+  out += `<ellipse cx="${cx}" cy="${bottom + 6}" rx="${rmax * 0.75}" ry="12" fill="#000" opacity=".08"/>`;
+  out += `<path d="M${L.map(p => p.join(',')).join('L')}L${R.reverse().map(p => p.join(',')).join('L')}Z" fill="${color}"/>`;
+  // layer lines with wave
+  const step = (bottom - top) / layers;
+  for (let k = 0; k < layers; k++) {
+    const t = k / layers, y0 = bottom - step * k, r = rmax * vaseProfile(t);
+    const ph = (k * lead) / 360 * 2 * Math.PI;
+    let d = '';
+    const M = 90;
+    for (let j = 0; j <= M; j++) {
+      const th = -Math.PI / 2 + Math.PI * j / M; // visible half
+      const s = Math.sin(th);
+      const circ = (th + Math.PI / 2) * r; // arc length proxy
+      const w = Math.sin(circ / len * 2 * Math.PI + ph);
+      const rr = r + amp * w;
+      const x = cx + rr * s, y = y0 - amp * 0.18 * w * Math.cos(th);
+      d += (j ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1);
+    }
+    out += `<path d="${d}" fill="none" stroke="${shade}" stroke-width="${step * 0.62}" stroke-opacity=".7" stroke-linecap="round"/>`;
+  }
+  out += `<path d="M${L.map(p => p.join(',')).join('L')}L${[...R].map(p => p.join(',')).join('L')}Z" fill="url(#cyl)"/>`;
+  if (top3d) { const r = rmax * vaseProfile(1); out += `<ellipse cx="${cx}" cy="${top}" rx="${r}" ry="${r * 0.18}" fill="#DAD6CD" stroke="${shade}" stroke-width="1"/><ellipse cx="${cx}" cy="${top + 2}" rx="${r - 4}" ry="${r * 0.15}" fill="#CFCAC0"/>`; }
+  return out;
+}
+function patternVase({ cx, top, bottom, rmax, motif, fil, reps = 5 }) {
+  let out = '';
+  const rows = 64, H = bottom - top;
+  out += `<ellipse cx="${cx}" cy="${bottom + 6}" rx="${rmax * 0.75}" ry="12" fill="#000" opacity=".08"/>`;
+  const MH = motif.length, MW = motif[0].length;
+  const cols = MW * reps * 2; // full circumference cells
+  for (let r = 0; r < rows; r++) {
+    const t0 = r / rows, t1 = (r + 1) / rows;
+    const y0 = bottom - H * t0, y1 = bottom - H * t1;
+    const rad0 = rmax * vaseProfile(t0), rad1 = rmax * vaseProfile(t1);
+    const mr = MH - 1 - Math.floor((r % MH));
+    for (let c = 0; c < cols / 2; c++) {
+      const a0 = -Math.PI / 2 + Math.PI * c / (cols / 2), a1 = -Math.PI / 2 + Math.PI * (c + 1) / (cols / 2);
+      const v = motif[mr][(c + 3) % MW];
+      const col = fil[v - 1].hex;
+      const shade = 0.72 + 0.28 * Math.cos((a0 + a1) / 2 - 0.35);
+      const p = [[cx + rad0 * Math.sin(a0), y0], [cx + rad0 * Math.sin(a1), y0], [cx + rad1 * Math.sin(a1), y1], [cx + rad1 * Math.sin(a0), y1]];
+      out += `<path d="M${p.map(q => q.map(n => n.toFixed(1)).join(',')).join('L')}Z" fill="${col}" style="filter:brightness(${shade.toFixed(2)})" stroke="${col}" stroke-width=".4"/>`;
+    }
+    out += `<line x1="${cx - rad1}" x2="${cx + rad1}" y1="${y1}" y2="${y1}" stroke="#000" stroke-opacity=".06" stroke-width=".8"/>`;
+  }
+  const r = rmax * vaseProfile(1);
+  out += `<ellipse cx="${cx}" cy="${top}" rx="${r}" ry="${r * 0.18}" fill="${fil[0].hex}" stroke="#CFCAC0"/><ellipse cx="${cx}" cy="${top + 2}" rx="${r - 4}" ry="${r * 0.15}" fill="#D8D4CB"/>`;
+  return out;
+}
+function topView({ cx, cy, R, amp, len, rings = 26, color = '#B9B4AA' }) {
+  let out = `<circle cx="${cx}" cy="${cy}" r="${R + amp + 6}" fill="#EFEDE8"/>`;
+  for (let k = 0; k < rings; k++) {
+    const r = R - k * 4.2, ph = k * 0.9;
+    let d = '';
+    for (let j = 0; j <= 1440; j++) { const a = j / 1440 * 2 * Math.PI, w = Math.sin(a * 48 + k * 0.25); const rr = r + (k < 3 ? amp * w : 0); d += (j ? 'L' : 'M') + (cx + rr * Math.cos(a)).toFixed(1) + ',' + (cy + rr * Math.sin(a)).toFixed(1); }
+    out += `<path d="${d}Z" fill="none" stroke="${k < 3 ? '#8E1B2C' : color}" stroke-opacity="${k < 3 ? .85 : .35}" stroke-width="${k < 3 ? 2.2 : 1.4}"/>`;
+  }
+  out += `<circle cx="${cx}" cy="${cy}" r="${R - rings * 4.2}" fill="#F6F5F2" stroke="${color}" stroke-opacity=".4"/>`;
+  return out;
+}
+
+/* ---------------- side cards ---------------- */
+function brand(name, letter, grad) {
+  return `<div class="brandcard"><div class="brandrow"><div class="logo" style="background:${grad}">${letter}</div><div class="bname">${name}<small>STUDIO</small></div><span style="flex:1"></span>${ib('col')}</div>
+  <div class="meta"><span class="mono">v2.4 · beta</span><a>Guide</a><a>Shortcuts</a></div></div>`;
+}
+function filCard(title, list, selected) {
+  return `<div class="card"><h3>${title}<span class="chev">▲</span></h3>
+  <div class="row"><label>Count</label><span class="stepper"><span>−</span><span class="num" style="width:28px;justify-content:center">${list.length}</span><span>+</span></span><span style="flex:1"></span><span class="badge">AMS ✓</span></div>
+  ${list.map(f => `<div class="fil"><span class="idx">${f.n}</span><div class="sw" style="background:${f.hex};${selected === f.n ? 'box-shadow:0 0 0 2px #fff,0 0 0 4px #2563EB' : ''}"></div><div class="txt"><small>${f.brand}</small><b>${f.name}</b></div><div class="acts"><span>${ic.edit}</span><span>${ic.x}</span></div></div>`).join('')}
+  </div>`;
+}
+
+/* ---------------- pages ---------------- */
+function motionex({ collapsed = false, render = 'side' } = {}) {
+  const S = { amp: 9, len: 44, lead: 14 };
+  const side = collapsed
+    ? `<div class="rail"><div class="logo" style="background:linear-gradient(135deg,#2563EB,#7C3AED)">M</div>${ib('col')}<small>Fil.</small>${FIL.slice(0, 2).map(f => `<div class="sw" style="background:${f.hex}"></div>`).join('')}<small style="margin-top:6px">Shape</small><span class="iconbtn on">${ic.smooth}</span></div>`
+    : `<div class="side">${brand('Motionex', 'M', 'linear-gradient(135deg,#2563EB,#7C3AED)')}
+    <div class="card"><h3>Motion<span class="chev">▲</span></h3>
+      <div class="row"><label>Name</label><div class="field">Soft ripple vase</div></div>
+      <div class="row"><label>Applies to</label><span class="sel">Whole object</span><span style="flex:1"></span>${ib('sel')}</div>
+      <div class="btns"><span class="btn">New</span><span class="btn">Library</span><span class="btn">Export</span><span style="flex:1"></span>${ib('more')}</div>
+      <div class="status"><b>●</b> Unsaved changes · on this placement only</div>
+    </div>
+    <div class="card"><h3>Shape<span class="chev">▲</span></h3>
+      <div class="tiles">
+        ${[['Sine', 'M2 11C8 1 14 1 20 11S32 21 38 11'], ['Zigzag', 'M2 11L11 3L20 19L29 3L38 11'], ['Loop', 'M2 14C10 14 8 3 14 3S18 14 22 14 26 3 30 3 34 14 38 14'], ['Dots', 'M2 11h4m6 0h4m6 0h4m6 0h4']].map(([n, d], i) => `<div class="tile ${i === 0 ? 'on' : ''}"><svg width="40" height="22"><path d="${d}" fill="none" stroke="${i === 0 ? '#18181B' : '#71717A'}" stroke-width="1.8" stroke-linecap="round"/></svg>${n}</div>`).join('')}
+      </div>
+    </div>
+    <div class="card"><h3>Size<span class="chev">▲</span></h3>
+      <div class="row"><label>Depth</label><span class="num mod">0.70</span><span class="unit">mm</span><span class="x">×</span><span class="num">1</span><span class="unit">walls</span></div>
+      <div class="row"><label>Length</label><span class="num">2.6</span><span class="unit">mm</span><span class="x">×</span><span class="num">48</span><span class="unit">/turn</span></div>
+      <div class="row"><label>Layers</label><span class="sel">Lead 14° / layer</span></div>
+      <div class="row"><label>Render as</label><span class="sel">${render === 'top' ? 'Top view' : 'Side view'}</span></div>
+    </div>
+    ${filCard('Filaments', FIL.slice(0, 1).concat([{ n: 2, name: 'Marsala Red', brand: 'Bambu Lab · PLA Matte', hex: '#8E1B2C' }]), 0)}
+    <div class="card closed"><h3>Print check<span class="badge">All good</span></h3></div>
+  </div>`;
+
+  const main = `<div class="main">
+    <div class="stage"><div class="bg"></div>
+      <div class="tabs"><span class="on">Model</span><span>Close-up</span><span>Toolpath</span></div>
+      <svg class="view" viewBox="0 0 1100 520" preserveAspectRatio="xMidYMid meet">
+        ${render === 'top' ? topView({ cx: 550, cy: 262, R: 200, amp: S.amp * 1.4, len: S.len }) : waveVase({ cx: 550, top: 60, bottom: 470, rmax: 175, amp: S.amp, len: S.len, lead: S.lead })}
+      </svg>
+      <div class="avatar">S</div>
+      <div class="stats"><div class="stat"><small>Print time</small><b>3 h 42 m</b></div><div class="stat"><small>Extra filament</small><b>+4.1 g</b></div><div class="stat"><small>Head clearance</small><b style="color:#059669">OK · 1.8 mm</b></div></div>
+      <div class="live"><span class="dot"></span>Live · updates as you drag</div>
+      <div class="toolbar" style="right:14px;bottom:14px"><span class="ttl">Preview</span>
+        <div class="grp"><small>Zoom</small><div><span class="sel">64%</span>${ib('fit')}</div></div>
+        <div class="grp"><small>Rotate</small><div><span class="sel">30°</span>${ib('rot')}</div></div>
+        <div class="grp"><small>Show</small><div><span class="seg"><span class="${render === 'side' ? 'on' : ''}">Side</span><span class="${render === 'top' ? 'on' : ''}">Top</span><span>Flat</span></span></div></div>
+      </div>
+    </div>
+    <div class="editor">
+      <div class="head"><span class="grip">⋮⋮</span><span class="ttl" style="font-weight:600;font-size:13px;align-self:center">Wave</span>
+        <div class="grp"><small>Zoom</small><div><span class="sel">100%</span>${ib('fit')}</div></div>
+        <div class="vsep"></div>
+        <div class="grp"><small>Edit</small><div>${ib('undo')}${ib('redo')}${ib('sel')}${ib('mirror')}</div></div>
+        <div class="vsep"></div>
+        <div class="grp"><small>Draw</small><div>${ib('node', true)}${ib('pen')}${ib('smooth')}</div></div>
+        <div class="vsep"></div>
+        <div class="grp"><small>Next layer</small><div><span class="seg"><span>Same</span><span class="on">Lead</span><span>Flip</span><span>Alternate</span></span></div></div>
+        <span style="flex:1"></span><span class="btn">Save to library</span>
+      </div>
+      <div class="body">${waveEditor(S)}</div>
+    </div>
+  </div>`;
+  return `<div class="studio ${collapsed ? 'collapsed' : ''}">${side}${main}</div>`;
+}
+function waveEditor(S) {
+  const W = 1100, H = 248;
+  let g = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="100%" preserveAspectRatio="none">`;
+  // grid
+  for (let x = 60; x < W; x += 26) g += `<line x1="${x}" x2="${x}" y1="18" y2="${H - 26}" stroke="#F0F0F2"/>`;
+  for (let y = 18; y < H - 20; y += 20) g += `<line x1="60" x2="${W - 20}" y1="${y}" y2="${y}" stroke="#F0F0F2"/>`;
+  g += `<line x1="60" x2="${W - 20}" y1="98" y2="98" stroke="#D4D4D8" stroke-dasharray="3 3"/>`;
+  // axis labels
+  for (let i = 0; i <= 38; i += 2) g += `<text x="${60 + i * 26}" y="${H - 10}" font-size="9.5" fill="#A1A1AA" text-anchor="middle" font-family="JetBrains Mono">${(i * 0.2).toFixed(1)}</text>`;
+  g += `<text x="14" y="38" font-size="9.5" fill="#A1A1AA" font-family="JetBrains Mono">+0.7</text><text x="14" y="102" font-size="9.5" fill="#A1A1AA" font-family="JetBrains Mono">0</text><text x="14" y="166" font-size="9.5" fill="#A1A1AA" font-family="JetBrains Mono">−0.7</text>`;
+  // three layers
+  const layers = [['#D4D4D8', 28], ['#A1A1AA', 14], ['#18181B', 0]];
+  layers.forEach(([c, sh], i) => {
+    let d = ''; for (let x = 60; x <= W - 20; x += 3) { const y = 98 - 64 * Math.sin((x - 60 + sh * 3) / 104 * 2 * Math.PI); d += (x === 60 ? 'M' : 'L') + x + ',' + y.toFixed(1); }
+    g += `<path d="${d}" fill="none" stroke="${c}" stroke-width="${i === 2 ? 2.4 : 1.6}" ${i < 2 ? 'stroke-dasharray="5 4"' : ''}/>`;
+  });
+  // period box + handles
+  g += `<rect x="164" y="26" width="104" height="144" fill="#2563EB" fill-opacity=".05" stroke="#2563EB" stroke-opacity=".35" stroke-dasharray="4 3" rx="4"/>`;
+  [[164, 98], [190, 34], [216, 98], [242, 162], [268, 98]].forEach(([x, y], i) => g += `<rect x="${x - 5}" y="${y - 5}" width="10" height="10" rx="2" fill="#fff" stroke="#2563EB" stroke-width="1.8"/>`);
+  g += `<path d="M190 34 L190 98" stroke="#2563EB" stroke-dasharray="2 2"/><text x="196" y="66" font-size="10.5" fill="#2563EB" font-family="JetBrains Mono">0.70 mm</text>`;
+  g += `<text x="216" y="186" font-size="10.5" fill="#2563EB" font-family="JetBrains Mono" text-anchor="middle">← 2.6 mm →</text>`;
+  g += `<g font-size="10" fill="#71717A"><rect x="${W - 190}" y="16" width="170" height="54" rx="7" fill="#fff" stroke="#E4E4E7"/><line x1="${W - 180}" x2="${W - 160}" y1="32" y2="32" stroke="#18181B" stroke-width="2.4"/><text x="${W - 154}" y="35">This layer</text><line x1="${W - 180}" x2="${W - 160}" y1="46" y2="46" stroke="#A1A1AA" stroke-width="1.6" stroke-dasharray="5 4"/><text x="${W - 154}" y="49">Layer below</text><line x1="${W - 180}" x2="${W - 160}" y1="60" y2="60" stroke="#D4D4D8" stroke-width="1.6" stroke-dasharray="5 4"/><text x="${W - 154}" y="63">Two below</text></g>`;
+  return g + '</svg>';
+}
+
+function patternex({ library = false, popover = false } = {}) {
+  const side = `<div class="side">${brand('Patternex', 'P', 'linear-gradient(135deg,#8E1B2C,#F59E0B)')}
+    <div class="card"><h3>Pattern<span class="chev">▲</span></h3>
+      <div class="row"><label>Name</label><div class="field">Nordic diamond band</div></div>
+      <div class="btns"><span class="btn">New</span><span class="btn">Open</span><span class="btn">Import SVG</span><span style="flex:1"></span>${ib('more')}</div>
+      <div class="status"><b>●</b> Unsaved changes</div>
+    </div>
+    <div class="card"><h3>Grid<span class="chev">▲</span></h3>
+      <div class="row"><label></label><span class="num">12</span><span class="unit">cells</span><span class="x">×</span><span class="num mod">10</span><span class="unit">repeats</span></div>
+      <div class="row"><label></label><span class="num">18</span><span class="unit">rows</span><span class="x">×</span><span class="num">1</span><span class="unit">repeats</span></div>
+      <div class="row"><label>Project</label><span class="sel">Wrap around</span></div>
+      <div class="row"><label>Starts at</label><span class="sel">↑ Bottom up</span></div>
+    </div>
+    <div class="card"><h3>Cell size<span class="chev">▲</span></h3>
+      <div class="row"><label></label><span class="num">2.4</span><span class="x">×</span><span class="num">0.8</span><span class="unit">mm (w × h)</span></div>
+      <div class="hint">= 4 layers per row at 0.20 mm</div>
+    </div>
+    ${filCard('Filaments', FIL, library ? 3 : 0)}
+  </div>`;
+  const main = `<div class="main">
+    <div class="stage"><div class="bg"></div>
+      <div class="tabs"><span class="on">Model</span><span>Flat</span><span>Colour changes</span></div>
+      <svg class="view" viewBox="0 0 1100 520" preserveAspectRatio="xMidYMid meet">${patternVase({ cx: 550, top: 58, bottom: 470, rmax: 178, motif: MOTIF, fil: FIL })}</svg>
+      <div class="avatar">S</div>
+      <div class="stats"><div class="stat"><small>Colour changes</small><b>212</b></div><div class="stat"><small>Purge</small><b>38 g · reduced</b></div><div class="stat"><small>Print time</small><b>6 h 10 m</b></div></div>
+      <div class="live"><span class="dot"></span>Live · painted cells appear on the model instantly</div>
+      <div class="toolbar" style="right:14px;bottom:14px"><span class="ttl">Preview</span>
+        <div class="grp"><small>Zoom</small><div><span class="sel">57%</span>${ib('fit')}</div></div>
+        <div class="grp"><small>Rotate</small><div><span class="sel">0°</span>${ib('rot')}</div></div>
+      </div>
+    </div>
+    <div class="editor">
+      <div class="head"><span class="grip">⋮⋮</span><span style="font-weight:600;font-size:13px;align-self:center">Chart</span>
+        <div class="grp"><small>Zoom</small><div><span class="sel">100%</span>${ib('fit')}</div></div>
+        <div class="vsep"></div>
+        <div class="grp"><small>Edit</small><div>${ib('undo')}${ib('redo')}${ib('sel')}${ib('mirror')}</div></div>
+        <div class="vsep"></div>
+        <div class="grp"><small>Paint</small><div>${ib('pen', true)}${ib('fill')}<span class="paintsel"><i style="background:${FIL[1].hex}">2</i>${FIL[1].name}<span style="flex:1"></span><span style="color:#A1A1AA">▾</span></span></div></div>
+        <span style="flex:1"></span><span class="btn">Save to library</span>
+      </div>
+      <div class="body">${chart()}</div>
+    </div>
+    ${popover ? `<div class="pop" style="left:398px;bottom:250px"><div><i style="background:${FIL[0].hex};color:#52525B">1</i>Ivory White</div><div class="on"><i style="background:${FIL[1].hex}">2</i>Marsala Red</div><div><i style="background:${FIL[2].hex}">3</i>Ocean Teal</div><div style="color:#A1A1AA"><i style="background:#fff;border:1px dashed #A1A1AA;color:#A1A1AA">∅</i>Keep base colour</div><div style="border-top:1px solid #E4E4E7;border-radius:0;margin-top:2px;color:#2563EB">＋ Add filament…</div></div>` : ''}
+    ${library ? libraryModal() : ''}
+  </div>`;
+  return `<div class="studio">${side}${main}</div>`;
+}
+function chart() {
+  const cs = 11.5, MH = MOTIF.length, MW = MOTIF[0].length;
+  const reps = 4, W = 60 + MW * reps * cs + 40, H = 248;
+  let g = `<svg viewBox="0 0 1100 ${H}" width="100%" height="100%" preserveAspectRatio="xMidYMin meet"><g transform="translate(${(1100 - W) / 2},6)">`;
+  for (let c = 0; c < MW * reps; c++) g += `<text x="${40 + c * cs + cs / 2}" y="8" font-size="8" fill="${c < MW ? '#71717A' : '#D4D4D8'}" text-anchor="middle" font-family="JetBrains Mono">${c % MW + 1}</text>`;
+  for (let r = 0; r < MH; r++) {
+    g += `<text x="30" y="${16 + r * cs + 9}" font-size="8" fill="#A1A1AA" text-anchor="end" font-family="JetBrains Mono">${MH - r}</text>`;
+    for (let c = 0; c < MW * reps; c++) {
+      const v = MOTIF[r][c % MW], f = FIL[v - 1], rep = c >= MW;
+      g += `<rect x="${40 + c * cs}" y="${12 + r * cs}" width="${cs - 1}" height="${cs - 1}" rx="1.5" fill="${f.hex}" opacity="${rep ? .4 : 1}"/>`;
+      if (!rep && v !== 1) g += `<text x="${40 + c * cs + cs / 2 - .5}" y="${12 + r * cs + 9}" font-size="7" fill="#fff" text-anchor="middle" font-family="JetBrains Mono">${v}</text>`;
+      if (!rep && v === 1) g += `<text x="${40 + c * cs + cs / 2 - .5}" y="${12 + r * cs + 9}" font-size="7" fill="#C9C4BA" text-anchor="middle" font-family="JetBrains Mono">1</text>`;
+    }
+  }
+  g += `<rect x="${40 - 1}" y="${11}" width="${MW * cs + 1}" height="${MH * cs + 1}" fill="none" stroke="#18181B" stroke-width="1.5" rx="2"/>`;
+  // hover cursor cell
+  g += `<rect x="${40 + 7 * cs - 1}" y="${12 + 6 * cs - 1}" width="${cs + 1}" height="${cs + 1}" fill="none" stroke="#2563EB" stroke-width="2" rx="2"/>`;
+  g += `<text x="${40 + MW * cs + 8}" y="${12 + MH * cs + 14}" font-size="9" fill="#A1A1AA">repeats ×10 around (faded)</text>`;
+  return g + '</g></svg>';
+}
+function libraryModal() {
+  const cols = [['#F5F3EE', 'Jade White', 'PLA Basic'], ['#EDE6D6', 'Ivory White', 'PLA Matte'], ['#D9CBB0', 'Desert Tan', 'PLA Matte'], ['#C7A27E', 'Latte Brown', 'PLA Matte'], ['#8A6A55', 'Dark Brown', 'PLA Matte'], ['#5B3A29', 'Cocoa', 'PLA Basic'], ['#2B2B2E', 'Charcoal', 'PLA Matte'], ['#9CA3AF', 'Ash Grey', 'PLA Matte'],
+    ['#7DD3FC', 'Ice Blue', 'PLA Matte'], ['#2F87C9', 'Cyan', 'PLA Basic'], ['#1F6F78', 'Ocean Teal', 'PolyTerra'], ['#1E3A8A', 'Marine Blue', 'PLA Matte'], ['#0F2547', 'Dark Blue', 'PLA Basic'], ['#6D28D9', 'Purple', 'PLA Basic'], ['#A78BFA', 'Lilac', 'PLA Matte'], ['#F9A8D4', 'Sakura Pink', 'PLA Matte'],
+    ['#E85D3F', 'Orange', 'PLA Basic'], ['#C2410C', 'Terracotta', 'PLA Matte'], ['#8E1B2C', 'Marsala Red', 'PLA Matte'], ['#B91C1C', 'Scarlet', 'PLA Matte'], ['#F2C14E', 'Lemon', 'PLA Matte'], ['#65A30D', 'Grass Green', 'PLA Matte'], ['#2F5D3A', 'Dark Green', 'PLA Matte'], ['#A3B18A', 'Sage', 'PolyTerra']];
+  return `<div class="scrim"></div><div class="modal" style="left:50%;transform:translateX(-50%);bottom:24px;width:860px">
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid #E4E4E7"><span class="grip" style="color:#A1A1AA">⋮⋮</span><b style="font-size:13px">Filament library</b><span style="flex:1"></span><span class="iconbtn">${ic.x}</span></div>
+    <div style="display:flex;align-items:center;gap:8px;padding:12px 16px 0"><div class="search">⌕&nbsp; Search filaments</div><span class="sel">Brand · 2 selected</span><span class="sel">Material · PLA</span><span class="sel">Colour · Any</span><span class="btn">Clear</span></div>
+    <div style="display:flex;gap:6px;padding:10px 16px 0"><span class="chip on">In my AMS</span><span class="chip">Colour order</span><span class="chip">Recently used</span><span class="chip">Bambu Lab</span><span class="chip">Polymaker</span><span style="flex:1"></span><span style="color:#A1A1AA;font-size:11px;align-self:center">Hover to preview on the model · click to swap slot 3</span></div>
+    <div class="libgrid">${cols.map(([h, n, m]) => `<div class="spool ${n === 'Ocean Teal' ? 'on' : ''}"><div class="s" style="background:${h}"></div>${n}<br><small>${m}</small></div>`).join('')}</div>
+    <div style="display:flex;justify-content:center;gap:10px;padding:0 0 12px;color:#71717A"><span>‹</span><b style="color:#18181B">1</b><span>2</span><span>3</span><span>›</span></div>
+  </div>`;
+}
+
+function anatomy() {
+  return `<div class="sheet"><h1>NexSpiro Studio pattern — one layout for every generative plugin</h1>
+  <p>Distilled from the Colorwork Studio reference: settings on the left, a big live preview, an editor underneath, and the same toolbar grammar everywhere.</p>
+  <div class="cols">
+    <div style="display:grid;gap:16px">
+      <div class="panel"><h2>Layout</h2>
+        <div class="wire">
+          <div style="left:12px;top:12px;width:150px;height:36px;background:#fff;border:1px solid #E4E4E7">① Brand · version · collapse</div>
+          <div style="left:12px;top:56px;width:150px;height:182px;background:#fff;border:1px solid #E4E4E7">② Stacked cards<br><span style="font-weight:400">Design → Grid/Shape → Size → Filaments → Check</span></div>
+          <div style="left:172px;top:12px;right:12px;height:132px;background:#EFF4FF;border:1px solid #BFDBFE;color:#1D4ED8">③ Live preview — the real model, redrawn on every input<br><span style="font-weight:400">④ floating Preview toolbar bottom-right · ⑤ stat chips top-right</span></div>
+          <div style="left:172px;top:152px;right:12px;height:86px;background:#fff;border:1px solid #E4E4E7">⑥ Editor (chart · wave curve · profile · paint)<br><span style="font-weight:400">⑦ toolbar groups: Zoom | Edit | Draw/Paint | mode</span></div>
+        </div>
+      </div>
+      <div class="panel"><h2>Interaction rules</h2><ul class="rules">
+        <li><span class="k">1</span><span><b>No Apply button.</b> Every field, drag and paint stroke redraws the preview within one frame (cheap proxy), the exact result follows in a worker.</span></li>
+        <li><span class="k">2</span><span><b>Two numbers on one line.</b> "value × repeats" / "depth × walls" — the sentence reads like the object.</span></li>
+        <li><span class="k">3</span><span><b>Tiny labels above tool groups</b> (Zoom, Edit, Paint) so icons are learnable without tooltips.</span></li>
+        <li><span class="k">4</span><span><b>Numbered colour slots everywhere</b> — same number on the swatch, chart cell, paint picker and AMS slot.</span></li>
+        <li><span class="k">5</span><span><b>Hover = preview, click = commit</b> in libraries (filaments, shapes, presets).</span></li>
+        <li><span class="k">6</span><span><b>Collapsible side.</b> Collapses to a rail of swatches so the preview can go near full-screen.</span></li>
+        <li><span class="k">7</span><span><b>State is always visible:</b> "Unsaved changes", modified values in amber, Print check as a badge.</span></li>
+      </ul></div>
+    </div>
+    <div class="panel"><h2>How each plugin maps onto the pattern</h2>
+      <table><tr><th>Plugin</th><th>② Cards</th><th>③ Preview</th><th>⑥ Editor</th></tr>
+      <tr><td>Motionex</td><td>Motion · Shape · Size · Filaments · Check</td><td>Vase with wavy walls · Side / Top / Flat</td><td>Wave curve, 3 stacked layers, handles</td></tr>
+      <tr><td>Patternex</td><td>Pattern · Grid · Cell size · Filaments</td><td>Pattern wrapped on model</td><td>Paintable chart (like the knit chart)</td></tr>
+      <tr><td>Weave / Paint</td><td>Picture · Colours · Purge · Check</td><td>Woven / sheen render</td><td>Picture → pixel chart</td></tr>
+      <tr><td>Lumonex</td><td>Lamp · Parts · Patterns · Holder · Joints</td><td>Lit lamp · exploded · plates</td><td>Silhouette profile with handles</td></tr>
+      <tr><td>Plantex</td><td>Pot · Profile · Texture · Drainage</td><td>Pot render</td><td>Profile curve + texture strip</td></tr>
+      <tr><td>Flenex</td><td>Creature · Body · Joints · Paint</td><td>Creature on bed</td><td>Spine curve + thickness handles</td></tr>
+      <tr><td>Clickex</td><td>Source · Switch · Inlay · Export</td><td>Clicker with switch, cut-open</td><td>Artwork / icon canvas</td></tr>
+      <tr><td>Hanex / Bulnex</td><td>Job · Cycles · Release · Monitor</td><td>Plate with parts</td><td>Cycle timeline</td></tr>
+      </table>
+      <div class="hint" style="margin-top:12px">Shared pieces to build once: <b style="color:#18181B">StudioShell, SideCard, NumPair, ToolGroup, PreviewToolbar, StatChip, FilamentSlots, FilamentLibrary, LiveBadge</b>, all on the existing --ns-* tokens.</div>
+    </div>
+  </div></div>`;
+}
+
+/* ---------------- annotations ---------------- */
+const NOTES = {
+  motionex: [[300, 30, '1', '<b>Stacked cards</b> — one idea per card, collapsible. Reads top-to-bottom like a recipe.'], [300, 250, '2', '<b>Two-number rows</b> (value × count) replace long forms. Amber = changed from preset.'], [700, 70, '3', '<b>Live preview</b> redraws on every keystroke and drag — no Apply button.'], [1040, 520, '4', '<b>Preview toolbar</b>: Zoom · Rotate · Side/Top/Flat, small labels above each group.'], [640, 590, '5', '<b>Wave editor</b>: drag the handles; the two faded lines show the layers below so stacking is visible.']],
+  patternex: [[300, 290, '1', '<b>Grid card</b> mirrors the chart: cells × repeats, rows × repeats.'], [720, 70, '2', 'Painting a cell recolours the <b>wrapped model</b> instantly.'], [700, 640, '3', '<b>Chart</b>: first repeat solid, the rest faded — you see the tiling while you paint one tile.'], [960, 590, '4', '<b>Paint picker</b> uses the same numbered slots as the Filaments card.']],
+  library: [[1040, 260, '1', '<b>Filament library</b> opens over the preview, not instead of it. Hover a spool → model previews it.'], [300, 610, '2', 'Selected slot is ringed in blue, so you know what you are replacing.']],
+  popover: [[620, 520, '1', '<b>Paint picker</b>: numbered slots, “keep base colour” as the eraser, add filament inline.']],
+  collapsed: [[110, 120, '1', '<b>Collapsed side</b> keeps only swatches and the active tool; preview gets the room.'], [740, 70, '2', '<b>Top view</b> render: same motion seen from above, switch is one click.']],
+};
+
+/* ---------------- mount ---------------- */
+const app = document.getElementById('app');
+const html = page === 'motionex' ? motionex()
+  : page === 'collapsed' ? motionex({ collapsed: true, render: 'top' })
+  : page === 'patternex' ? patternex()
+  : page === 'popover' ? patternex({ popover: true })
+  : page === 'library' ? patternex({ library: true })
+  : anatomy();
+app.innerHTML = html;
+if (annotate && NOTES[page]) NOTES[page].forEach(([x, y, n, t]) => {
+  app.appendChild($(`<div class="note" style="left:${x}px;top:${y}px"><span class="n">${n}</span>${t}</div>`));
+});
+</script>
+</body>
+</html>

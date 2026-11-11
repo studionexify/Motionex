@@ -1,0 +1,166 @@
+/* Plugin Studio shell: stacked side cards, a big live preview with a floating toolbar, an editor underneath.
+   Shared by every generative plugin's Studio. Built on the --ns-* tokens (light and dark). */
+.st-back { position: fixed; inset: 0; z-index: 900; background: color-mix(in srgb, var(--ns-canvas-b) 70%, transparent); backdrop-filter: blur(2px); }
+.st { position: absolute; inset: 14px; display: grid; grid-template-columns: 268px minmax(0, 1fr); gap: 12px; color: var(--ns-text); font: 400 12px/1.45 var(--ns-font-ui); user-select: none; }
+.st.collapsed { grid-template-columns: 60px minmax(0, 1fr); }
+.st-side { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-bottom: 4px; scrollbar-width: thin; }
+.st-brand, .st-card, .st-rail, .st-stage, .st-editor { background: var(--ns-panel); border-radius: var(--ns-r-outer); box-shadow: var(--ns-shadow); }
+.st-brand { padding: 12px 14px; flex: none; }
+.st-brand-row { display: flex; align-items: center; gap: 8px; }
+.st-logo { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px; flex: none; }
+.st-bname { font-weight: 700; font-size: 15px; letter-spacing: .2px; flex: 1; white-space: nowrap; }
+.st-bname small { font-weight: 500; font-size: 10px; letter-spacing: 1.6px; color: var(--ns-text-3); margin-left: 5px; }
+.st-meta { color: var(--ns-text-3); font-size: 10.5px; margin-top: 6px; display: flex; gap: 10px; align-items: center; }
+.st-meta button { border: 0; background: none; padding: 0; color: var(--ns-text-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; font-size: 10.5px; }
+
+.st-card { padding: 10px 14px 12px; flex: none; }
+.st-card > header { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; cursor: pointer; margin: 0 0 6px; }
+.st-card.closed { padding-bottom: 10px; }
+.st-card.closed > header { margin: 0; }
+.st-card > header .st-chev { margin-left: auto; color: var(--ns-text-3); font-size: 9px; transition: transform .15s; }
+.st-card.closed > header .st-chev { transform: rotate(180deg); }
+.st-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; color: var(--ns-text-2); min-height: 24px; }
+.st-row > .st-lab { min-width: 62px; flex: none; }
+.st-unit { color: var(--ns-text-3); white-space: nowrap; }
+.st-x { color: var(--ns-text-3); }
+.st-num { width: 50px; height: 24px; border: 1px solid var(--ns-line); border-radius: 6px; padding: 0 6px; font: 400 11px var(--ns-font-mono); color: var(--ns-text); background: var(--ns-panel); outline: none; }
+.st-num:focus { border-color: var(--ns-primary); box-shadow: 0 0 0 3px var(--ns-primary-soft); }
+.st-num.mod { border-color: var(--ns-warn); background: color-mix(in srgb, var(--ns-warn) 9%, var(--ns-panel)); }
+.st-text { flex: 1; min-width: 0; height: 26px; border: 1px solid var(--ns-line); border-radius: 6px; padding: 0 8px; background: var(--ns-panel); color: var(--ns-text); outline: none; font: inherit; }
+.st-text:focus { border-color: var(--ns-primary); }
+.st-sel { height: 24px; border: 1px solid var(--ns-line); border-radius: 6px; padding: 0 6px; background: var(--ns-panel); color: var(--ns-text); font: inherit; cursor: pointer; }
+.st-btn { height: 26px; padding: 0 10px; border: 1px solid var(--ns-line); border-radius: 6px; background: var(--ns-panel); color: var(--ns-text); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font: inherit; white-space: nowrap; }
+.st-btn:hover:not(:disabled) { background: var(--ns-panel-2); }
+.st-btn:disabled { color: var(--ns-text-3); cursor: default; }
+.st-btn.primary { background: var(--ns-primary); border-color: var(--ns-primary); color: #fff; font-weight: 600; }
+.st-btn.primary:hover:not(:disabled) { background: var(--ns-primary-hover); }
+.st-btns { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.st-status { font-size: 10.5px; color: var(--ns-text-3); text-align: right; margin-top: 6px; }
+.st-status b { color: var(--ns-warn); font-weight: 500; }
+.st-status.ok b { color: var(--ns-ok); }
+.st-hint { font-size: 10.5px; color: var(--ns-text-3); margin-top: 4px; line-height: 1.4; }
+.st-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--ns-ok) 14%, transparent); color: color-mix(in srgb, var(--ns-ok) 70%, var(--ns-text)); font-weight: 500; }
+.st-badge.warn { background: color-mix(in srgb, var(--ns-warn) 16%, transparent); color: color-mix(in srgb, var(--ns-warn) 60%, var(--ns-text)); }
+.st-step { display: inline-flex; align-items: center; gap: 2px; }
+.st-step button { width: 20px; height: 20px; border: 0; border-radius: 5px; background: transparent; color: var(--ns-text-2); cursor: pointer; font-size: 14px; line-height: 1; }
+.st-step button:hover:not(:disabled) { background: var(--ns-hover); }
+.st-step button:disabled { color: var(--ns-text-3); cursor: default; }
+.st-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 2px; }
+.st-tile { border: 1px solid var(--ns-line); border-radius: 7px; padding: 4px 2px 3px; text-align: center; font-size: 10px; color: var(--ns-text-2); background: var(--ns-panel); cursor: pointer; font-family: inherit; }
+.st-tile:hover { border-color: var(--ns-text-3); }
+.st-tile.on { border-color: var(--ns-active); box-shadow: 0 0 0 1px var(--ns-active); color: var(--ns-text); }
+.st-tile canvas, .st-tile svg { display: block; margin: 0 auto 2px; }
+
+.st-seg { display: inline-flex; border: 1px solid var(--ns-line); border-radius: 6px; overflow: hidden; flex: none; }
+.st-seg button { border: 0; background: var(--ns-panel); padding: 3px 9px; font: inherit; font-size: 11px; color: var(--ns-text-2); cursor: pointer; }
+.st-seg button.on { background: var(--ns-active); color: var(--ns-on-active); }
+.st-seg button:disabled { color: var(--ns-text-3); cursor: default; }
+
+/* filament slots */
+.st-fil { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--ns-line); }
+.st-fil:first-of-type { border-top: 0; }
+.st-fil .st-idx { width: 14px; color: var(--ns-text-3); font: 400 10.5px var(--ns-font-mono); }
+.st-sw { width: 32px; height: 32px; border-radius: 7px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.1); border: 0; padding: 0; cursor: pointer; flex: none; position: relative; }
+.st-sw.on { box-shadow: 0 0 0 2px var(--ns-panel), 0 0 0 4px var(--ns-primary); }
+.st-fil .st-ftxt { flex: 1; min-width: 0; line-height: 1.25; }
+.st-fil .st-ftxt small { display: block; color: var(--ns-text-3); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-fil .st-ftxt b { font-weight: 600; font-size: 11.5px; }
+
+/* main column */
+.st-main { position: relative; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 12px; min-width: 0; min-height: 0; }
+.st-stage { position: relative; overflow: hidden; min-height: 0; }
+.st-stage-bg { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 40%, var(--ns-panel) 0%, var(--ns-panel-2) 75%); }
+.st-tabs { position: absolute; left: 14px; top: 12px; display: flex; gap: 3px; background: var(--ns-panel-2); padding: 3px; border-radius: 8px; border: 1px solid var(--ns-line); z-index: 2; }
+.st-tabs button { border: 0; background: transparent; padding: 4px 10px; border-radius: 6px; color: var(--ns-text-2); font: 500 12px var(--ns-font-ui); cursor: pointer; }
+.st-tabs button.on { background: var(--ns-panel); color: var(--ns-text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.st-close { position: absolute; right: 12px; top: 12px; z-index: 3; display: flex; gap: 6px; }
+.st-stats { position: absolute; right: 14px; top: 52px; display: flex; flex-direction: column; gap: 6px; z-index: 2; pointer-events: none; }
+.st-stat { background: color-mix(in srgb, var(--ns-panel) 92%, transparent); border: 1px solid var(--ns-line); border-radius: 8px; padding: 6px 10px; min-width: 132px; }
+.st-stat small { display: block; color: var(--ns-text-3); font-size: 10px; }
+.st-stat b { font: 500 12px var(--ns-font-mono); }
+.st-stat.ok b { color: var(--ns-ok); }
+.st-stat.warn b { color: var(--ns-warn); }
+.st-live { position: absolute; left: 14px; bottom: 14px; display: flex; gap: 8px; align-items: center; color: var(--ns-text-2); font-size: 11px; z-index: 2; pointer-events: none; }
+.st-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ns-ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ns-ok) 20%, transparent); }
+.st-dot.busy { background: var(--ns-warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ns-warn) 20%, transparent); }
+.st-toolbar { position: absolute; z-index: 2; display: flex; align-items: flex-end; gap: 12px; background: var(--ns-panel); border: 1px solid var(--ns-line); border-radius: 10px; box-shadow: var(--ns-shadow); padding: 6px 12px 7px; }
+.st-toolbar.br { right: 14px; bottom: 14px; }
+.st-ttl { font-weight: 600; font-size: 13px; align-self: center; white-space: nowrap; }
+.st-grp { display: flex; flex-direction: column; gap: 3px; }
+.st-grp > small { font-size: 9.5px; color: var(--ns-text-3); letter-spacing: .2px; padding-left: 2px; white-space: nowrap; }
+.st-grp > div { display: flex; align-items: center; gap: 3px; }
+.st-vsep { width: 1px; align-self: stretch; background: var(--ns-line); }
+.st-ib { width: 26px; height: 24px; border: 0; background: transparent; border-radius: 6px; display: grid; place-items: center; color: var(--ns-text-2); cursor: pointer; padding: 0; }
+.st-ib:hover:not(:disabled) { background: var(--ns-hover); color: var(--ns-text); }
+.st-ib.on { background: var(--ns-active); color: var(--ns-on-active); }
+.st-ib:disabled { opacity: .35; cursor: default; }
+
+.st-editor { position: relative; height: var(--st-editor-h, 300px); display: flex; flex-direction: column; overflow: hidden; }
+.st-editor-head { display: flex; align-items: flex-end; gap: 12px; padding: 7px 12px 8px; border-bottom: 1px solid var(--ns-line); flex: none; flex-wrap: wrap; }
+.st-grip { color: var(--ns-text-3); align-self: center; cursor: ns-resize; letter-spacing: -2px; padding: 0 2px; }
+.st-editor-body { position: relative; flex: 1; min-height: 0; }
+
+/* paint picker */
+.st-paint { position: relative; }
+.st-paint > button { display: inline-flex; align-items: center; gap: 6px; height: 24px; border: 1px solid var(--ns-line); border-radius: 6px; padding: 0 8px 0 3px; min-width: 150px; background: var(--ns-panel); color: var(--ns-text); font: inherit; cursor: pointer; }
+.st-chip { width: 18px; height: 18px; border-radius: 4px; color: #fff; font: 500 10px var(--ns-font-mono); display: grid; place-items: center; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); flex: none; }
+.st-chip.base { background: repeating-linear-gradient(45deg, var(--ns-panel) 0 3px, var(--ns-panel-2) 3px 6px) !important; color: var(--ns-text-3); }
+.st-pop { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; background: var(--ns-panel); border: 1px solid var(--ns-line); border-radius: 8px; box-shadow: var(--ns-shadow-lg); padding: 4px; min-width: 190px; }
+.st-pop button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 5px 8px; border: 0; border-radius: 5px; background: none; color: var(--ns-text); font: inherit; cursor: pointer; text-align: left; }
+.st-pop button:hover, .st-pop button.on { background: var(--ns-panel-2); }
+.st-pop hr { border: 0; border-top: 1px solid var(--ns-line); margin: 3px 0; }
+.st-pop .add { color: var(--ns-primary); }
+
+/* collapsed rail */
+.st-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0; overflow: hidden; }
+.st-rail small { font-size: 9.5px; color: var(--ns-text-3); margin-top: 4px; }
+.st-rail .st-sw { width: 28px; height: 28px; }
+
+/* filament library */
+.st-lib { position: absolute; z-index: 30; left: 50%; transform: translateX(-50%); bottom: 10px; width: min(900px, calc(100% - 28px)); max-height: calc(var(--st-editor-h, 300px) + 40px); display: flex; flex-direction: column; background: var(--ns-panel); border: 1px solid var(--ns-line); border-radius: 12px; box-shadow: var(--ns-shadow-lg); }
+.st-lib-head { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-bottom: 1px solid var(--ns-line); }
+.st-lib-tools { display: flex; align-items: center; gap: 8px; padding: 12px 16px 0; flex-wrap: wrap; }
+.st-lib-tools .st-text { height: 28px; }
+.st-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 10px; min-height: 0; padding: 14px 16px; overflow-y: auto; }
+.st-spool { border: 0; background: none; padding: 0; text-align: center; font: inherit; font-size: 10.5px; color: var(--ns-text-2); line-height: 1.25; cursor: pointer; }
+.st-spool i { display: block; aspect-ratio: 1; border-radius: 9px; margin-bottom: 4px; position: relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+.st-spool i::after { content: ''; position: absolute; inset: 32%; border-radius: 50%; background: rgba(255,255,255,.55); box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+.st-spool.on i { box-shadow: 0 0 0 2px var(--ns-panel), 0 0 0 4px var(--ns-primary); }
+.st-spool small { color: var(--ns-text-3); display: block; }
+.st-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.st-chipbtn { display: inline-flex; align-items: center; padding: 3px 10px; border: 1px solid var(--ns-line); border-radius: 999px; font: inherit; font-size: 11px; color: var(--ns-text-2); background: var(--ns-panel); cursor: pointer; }
+.st-chipbtn.on { background: var(--ns-active); color: var(--ns-on-active); border-color: var(--ns-active); }
+.st-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* plugin panels reused inside Studio side cards: no card-in-card */
+.st-side .st-card .mx-card { box-shadow: none; border: 0; padding: 0; margin: 0 0 8px; background: none; border-radius: 0; }
+.st-side .st-card .mx-card + .mx-card { border-top: 1px solid var(--ns-line); padding-top: 8px; }
+.st-side .st-card .mx-panel { padding: 0; gap: 8px; }
+.st-card-body { display: flex; flex-direction: column; gap: 6px; }
+.st-stage-flat { position: absolute; inset: 52px 14px 14px; display: grid; place-items: center; overflow: auto; }
+.st-stage .live3d-float { left: 14px; right: auto; top: 12px; z-index: 4; }
+.st-stage .live3d-off { position: absolute; inset: 0; }
+.st-close .select { height: 26px; width: 100%; border-radius: 6px; }
+.cx-shell button { cursor: pointer; }
+.cx-shell button:disabled { opacity: .45; cursor: default; }
+.st-close .cx-plate { height: 26px; background: var(--ns-panel); border: 1px solid var(--ns-line); border-radius: 6px; padding: 0 8px; }
+.st-live { background: color-mix(in srgb, var(--ns-panel) 90%, transparent); border: 1px solid var(--ns-line); padding: 4px 10px; border-radius: 999px; }
+.st-editor-body .cx-sources { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.st-editor-body .cx-eyebrow.big { display: none; }
+
+/* filament picker (loaded first, then not-loaded library) */
+.st-ffield { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px 4px 4px; border-radius: 8px; border: 1px solid var(--ns-line); background: var(--ns-panel); color: var(--ns-text); cursor: pointer; text-align: left; }
+.st-ffield:hover { border-color: var(--ns-primary); }
+.st-ffield .st-ftxt, .st-fpick-row .st-ftxt { flex: 1; min-width: 0; line-height: 1.2; }
+.st-ffield .st-ftxt small, .st-fpick-row .st-ftxt small { display: block; color: var(--ns-text-3); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-ffield .st-ftxt b, .st-fpick-row .st-ftxt b { font-size: 11.5px; font-weight: 600; }
+.st-fpick { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; width: 280px; max-height: 380px; overflow: auto; background: var(--ns-panel); border: 1px solid var(--ns-line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.st-fpick-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 10px 4px; font-size: 12px; }
+.st-fpick-sub { display: block; padding: 6px 10px 2px; color: var(--ns-text-3); font-size: 10.5px; }
+.st-fpick-list { display: flex; flex-direction: column; padding: 2px 6px; }
+.st-fpick-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border: 0; border-radius: 6px; background: none; color: var(--ns-text); cursor: pointer; text-align: left; }
+.st-fpick-row:hover, .st-fpick-row.on { background: color-mix(in srgb, var(--ns-primary) 12%, transparent); }
+.st-fpick-lib { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; padding: 4px 10px 8px; }
+.st-fpick-lib button, .st-fpick-custom { aspect-ratio: 1; border-radius: 5px; border: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); cursor: pointer; padding: 0; }
+.st-fpick-custom { display: grid; place-items: center; position: relative; font-size: 14px; color: var(--ns-text-3); background: var(--ns-bg, transparent); }
+.st-fpick-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }

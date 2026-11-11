@@ -1,0 +1,6 @@
+node_modules/
+dist/
+release/
+electron/dist/
+out/
+desktop-build/
