@@ -4,7 +4,7 @@
 // (flat ribbons, or round tubes for close-up), with blobs, thin spots and sag from physics.ts.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { makeSurface, type Design } from './design';
+import { makeInner, makeSurface, meshGrid, type Design } from './design';
 import type { GenResult } from './generator';
 import { DEFECT, type PrintSim } from './physics';
 
@@ -64,7 +64,7 @@ export class StudioView {
   camera = new THREE.PerspectiveCamera(35, 1, 1, 5000);
   private controls: OrbitControls;
   private mesh: THREE.Mesh | null = null;
-  private meshRows = 0; private meshCols = 0;
+  private meshRows = 0; private meshCols = 0; private meshOpen = false;
   private lines: THREE.LineSegments | null = null;
   private beads: THREE.Mesh | null = null;
   private beadIndex: Int32Array = new Int32Array(0);        // instance -> seg
@@ -134,34 +134,38 @@ export class StudioView {
   /** Rebuild the piece mesh. quick = coarse mesh for live dragging. */
   setDesign(d: Design, color = '#ece6dc', quick = false) {
     this.design = d;
-    const surf = makeSurface(d); this.surf = surf;
-    let rows = Math.min(260, Math.max(60, Math.round(d.height / 1)));
-    const reliefCols = d.relief.kind === 'smooth' ? 0 : d.relief.count * 6;
-    const secCols = d.section === 'round' ? 0 : d.sides * 12;
-    let cols = Math.min(540, Math.max(144, reliefCols, secCols));
-    if (quick) { rows = Math.max(40, rows >> 1); cols = Math.max(96, cols >> 1); }
-    const nV = (rows + 1) * (cols + 1) + 1;
+    const surf = makeSurface(d), inner = makeInner(d); this.surf = surf;
+    const { rows, cols } = meshGrid(d, 380_000, quick);
+    const G = (rows + 1) * (cols + 1), nV = G * 2 + 1;
     let geo = this.mesh?.geometry as THREE.BufferGeometry | undefined;
-    const reuse = !!geo && this.meshRows === rows && this.meshCols === cols && (geo.getIndex()!.count === rows * cols * 6 + (d.openBottom ? 0 : cols * 3));
+    const reuse = !!geo && this.meshRows === rows && this.meshCols === cols && this.meshOpen === d.openBottom;
     const pos = reuse ? (geo!.getAttribute('position').array as Float32Array) : new Float32Array(nV * 3);
-    let k = 0;
     const cosT = new Float32Array(cols + 1), sinT = new Float32Array(cols + 1);
     for (let j = 0; j <= cols; j++) { const th = (j / cols) * TAU; cosT[j] = Math.cos(th); sinT[j] = Math.sin(th); }
-    for (let i = 0; i <= rows; i++) {
+    let k = 0;
+    for (const f of [surf, inner]) for (let i = 0; i <= rows; i++) {
       const z = (i / rows) * d.height;
-      for (let j = 0; j <= cols; j++) { const r = surf(z, (j / cols) * TAU); pos[k++] = r * cosT[j]; pos[k++] = r * sinT[j]; pos[k++] = z; }
+      for (let j = 0; j <= cols; j++) { const r = f(z, (j / cols) * TAU); pos[k++] = r * cosT[j]; pos[k++] = r * sinT[j]; pos[k++] = z; }
     }
     pos[k++] = 0; pos[k++] = 0; pos[k++] = 0;
     if (!reuse) {
-      const idx: number[] = [];
-      for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) { const a = i * (cols + 1) + j, b = a + 1, c = a + cols + 1, e = c + 1; idx.push(a, b, e, a, e, c); }
-      if (!d.openBottom) { const centre = (rows + 1) * (cols + 1); for (let j = 0; j < cols; j++) idx.push(centre, j, j + 1); }
+      const idx = new Uint32Array(rows * cols * 12 + cols * 6 + cols * 6);
+      let q = 0;
+      for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
+        const a = i * (cols + 1) + j, b = a + 1, c = a + cols + 1, e = c + 1;
+        idx[q++] = a; idx[q++] = b; idx[q++] = e; idx[q++] = a; idx[q++] = e; idx[q++] = c;
+        idx[q++] = G + a; idx[q++] = G + e; idx[q++] = G + b; idx[q++] = G + a; idx[q++] = G + c; idx[q++] = G + e;
+      }
+      const top = rows * (cols + 1);
+      for (let j = 0; j < cols; j++) { const o = top + j; idx[q++] = o; idx[q++] = o + 1; idx[q++] = G + o + 1; idx[q++] = o; idx[q++] = G + o + 1; idx[q++] = G + o; }
+      if (d.openBottom) for (let j = 0; j < cols; j++) { idx[q++] = j; idx[q++] = G + j + 1; idx[q++] = j + 1; idx[q++] = j; idx[q++] = G + j; idx[q++] = G + j + 1; }
+      else { const centre = 2 * G; for (let j = 0; j < cols; j++) { idx[q++] = centre; idx[q++] = j + 1; idx[q++] = j; idx[q++] = centre; idx[q++] = j; idx[q++] = j + 1; } }
       geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nV * 3).fill(1), 3));
-      geo.setIndex(idx);
+      geo.setIndex(new THREE.BufferAttribute(idx.subarray(0, q), 1));
       if (this.mesh) { this.mesh.geometry.dispose(); this.mesh.geometry = geo; }
-      this.meshRows = rows; this.meshCols = cols;
+      this.meshRows = rows; this.meshCols = cols; this.meshOpen = d.openBottom;
     } else geo!.getAttribute('position').needsUpdate = true;
     geo!.computeVertexNormals();
     geo!.computeBoundingSphere();
@@ -186,16 +190,17 @@ export class StudioView {
     const pos = geo.getAttribute('position').array as Float32Array;
     const rows = this.meshRows, cols = this.meshCols, H = this.design.height, base = this.baseColor;
     const fn = this.highlight;
-    for (let i = 0; i <= rows; i++) {
+    const G = (rows + 1) * (cols + 1);
+    for (let gi = 0; gi < 2; gi++) for (let i = 0; i <= rows; i++) {
       const z = (i / rows) * H;
       for (let j = 0; j <= cols; j++) {
-        const v = i * (cols + 1) + j, o = v * 3;
+        const v = gi * G + i * (cols + 1) + j, o = v * 3;
         let r = base.r, g = base.g, b = base.b;
         if (fn) { const hc = fn(z, j / cols, Math.hypot(pos[o], pos[o + 1])); if (hc) { r = hc[0]; g = hc[1]; b = hc[2]; } }
         c[o] = r; c[o + 1] = g; c[o + 2] = b;
       }
     }
-    const last = (rows + 1) * (cols + 1) * 3; c[last] = base.r; c[last + 1] = base.g; c[last + 2] = base.b;
+    const last = 2 * G * 3; c[last] = base.r; c[last + 1] = base.g; c[last + 2] = base.b;
     col.needsUpdate = true;
   }
 

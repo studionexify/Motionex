@@ -9,9 +9,14 @@ export interface Pattern { id: string; name: string; group: string; count: numbe
 const TAU = Math.PI * 2;
 const fr = (x: number) => x - Math.floor(x);
 const cl = (x: number, a = 0, b = 1) => Math.min(b, Math.max(a, x));
-const ss = (a: number, b: number, x: number) => { const t = cl((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+/** Edge softness (0 knife-sharp … 1 round), set per relief before evaluating. Edges stay a hair wide so the slicer path is continuous. */
+let EDGE = 0.15;
+export const setEdge = (e: number) => { EDGE = Math.min(1, Math.max(0, e)); };
+/** Step from 0 to 1 centred between a and b; its width shrinks with EDGE so shapes keep exact positions but crisp sides. */
+const ss = (a: number, b: number, x: number) => { const m = (a + b) / 2, hw = Math.max(0.004, Math.abs(b - a) / 2 * EDGE * 2) * Math.sign(b - a || 1); const t = cl((x - (m - hw)) / (2 * hw)); return t * t * (3 - 2 * t); };
 const tri = (x: number) => 1 - Math.abs(2 * fr(x) - 1);            // 0..1..0
-const line = (d: number, w: number) => 1 - ss(w * 0.5, w, Math.abs(d)); // soft ridge at d = 0
+/** Ridge of width w centred on d = 0: flat top, crisp bevelled sides. */
+const line = (d: number, w: number) => 1 - ss(w * 0.5, w * 0.5 + Math.max(0.01, w * 0.5), Math.abs(d));
 const hash2 = (x: number, y: number, s: number) => { const h = Math.sin(x * 127.1 + y * 311.7 + s * 17.3) * 43758.5453; return h - Math.floor(h); };
 function noise2(x: number, y: number, s: number) {
   const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
@@ -72,8 +77,8 @@ export const PATTERNS: Pattern[] = [
     ['wanzi', 'Wanzi key lattice', 10, 1, (u, v) => { const x = fr(u) * 6, y = fr(v) * 6; const xi = Math.floor(x), yi = Math.floor(y); const on = xi === 3 || yi === 3 || (yi === 0 && xi >= 3) || (xi === 0 && yi <= 3) || (yi === 5 && xi <= 3) || (xi === 5 && yi >= 3); return on ? 1 : 0.1; }],
   ]),
   ...P('Islamic & Moorish', [
-    ['khatam', 'Eight-point star (khatam)', 10, 1.2, (u, v) => { const [x, y] = local(u, v); const a = Math.max(Math.abs(x), Math.abs(y)), b = (Math.abs(x) + Math.abs(y)) / Math.SQRT2; return 1 - ss(0.28, 0.33, Math.min(a, b) === a ? Math.max(a, b) : Math.max(a, b)); }],
-    ['zellige', 'Zellige stars & crosses', 10, 1, (u, v) => { const [x, y] = local(u, v); const st = Math.max(Math.max(Math.abs(x), Math.abs(y)), (Math.abs(x) + Math.abs(y)) / Math.SQRT2); return Math.max(line(st - 0.3, 0.06), line(Math.max(Math.abs(x), Math.abs(y)) - 0.48, 0.05)) + (st < 0.3 ? 0.35 : 0); }],
+    ['khatam', 'Eight-point star (khatam)', 10, 1.2, (u, v) => { const [x, y] = local(u, v); const a = Math.max(Math.abs(x), Math.abs(y)), b = (Math.abs(x) + Math.abs(y)) / Math.SQRT2; const st = Math.min(a, b); return Math.max(1 - ss(0.3, 0.33, st), line(st - 0.4, 0.05)); }],
+    ['zellige', 'Zellige stars & crosses', 10, 1, (u, v) => { const [x, y] = local(u, v); const st = Math.min(Math.max(Math.abs(x), Math.abs(y)), (Math.abs(x) + Math.abs(y)) / Math.SQRT2); return Math.max(line(st - 0.3, 0.06), line(Math.max(Math.abs(x), Math.abs(y)) - 0.48, 0.05)) + (st < 0.3 ? 0.35 : 0); }],
     ['girih', 'Girih ten-fold', 8, 1.2, (u, v) => { const [x, y] = local(u, v); const a = Math.atan2(y, x), r = circ(x, y); const star = r * Math.cos(((a % (TAU / 10)) + TAU) % (TAU / 10) - TAU / 20); return Math.max(line(star - 0.32, 0.05), line(r * Math.abs(Math.sin(a * 5)), 0.04) * (r < 0.32 ? 1 : 0), line(Math.max(Math.abs(x), Math.abs(y)) - 0.5, 0.05)); }],
     ['mashrabiya', 'Mashrabiya screen', 14, 1.2, (u, v) => { const [x, y] = local(u, v); const d = Math.min(Math.abs(Math.abs(x) - Math.abs(y)), Math.abs(x), Math.abs(y)); return Math.max(line(d, 0.12), 1 - ss(0.1, 0.16, circ(x, y))); }],
     ['trellis', 'Moroccan trellis', 10, 1.2, (u, v) => { const x = fr(u) - 0.5, y = fr(v * 0.8) - 0.5; const lobe = Math.min(circ(Math.abs(x) - 0.5, y) , circ(x, Math.abs(y) - 0.5)); return line(lobe - 0.35, 0.08); }],

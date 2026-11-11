@@ -8,7 +8,7 @@ import { effectPhase } from '../plugins/motionex/modifier';
 import { ALL_RELIEFS, defaultDesign, estimate, makeSurface, FAMILIES, NOISE_RELIEFS, OUTLINES, profileR, relief as reliefAt, RELIEFS, SECTIONS, surprise, type Design, type Family, type ProfilePoint } from './design';
 import { heightBytes, type HeightMap } from './reliefs';
 import { fileToMap, textToMap } from './relief-import';
-import { DEFAULT_SLICE, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
+import { DEFAULT_SLICE, wallLines, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
 import { physicsFor, simulate, type Physics, type PrintSim } from './physics';
@@ -429,7 +429,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         row('Narrow at top', num(() => D().narrowTop, (v) => (D().narrowTop = v), -0.6, 0.6, 0.01, '', dChange), Math.abs(D().narrowTop) > 0.45 ? 'Strong taper: check the overhang.' : undefined),
         row('Twist', num(() => D().twist, (v) => (D().twist = v), 0, 360, 5, '°', dChange)),
         row('Twist shape', select([['linear', 'Even'], ['s', 'S-curve'], ['wave', 'Back and forth']], () => D().twistShape, (v) => (D().twistShape = v), dChange)),
-        row('Wall', num(() => D().wall, (v) => (D().wall = v), 0.8, 6, 0.1, 'mm', dChange)),
+        row('Wall thickness', num(() => D().wall, (v) => (D().wall = v), 0.4, 8, 0.05, 'mm', dChange), `${wallLines(D(), S.slice)} line${wallLines(D(), S.slice) > 1 ? 's' : ''} per layer`),
         row('Open bottom', toggle(() => D().openBottom, (v) => (D().openBottom = v), dChange))));
     } else if (S.designTab === 'relief') {
       const rl = D().relief;
@@ -459,8 +459,11 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       if (rl.kind !== 'smooth') {
         const custom = !RELIEFS.some((x) => x.id === rl.kind);
         right.append(group(`Edit · ${ALL_RELIEFS.find((x) => x.id === rl.kind)?.name ?? (rl.kind === 'image' ? 'Imported' : rl.kind)}`,
+          row('Relief on', seg<'outside' | 'inside' | 'both'>([['outside', 'Outside'], ['inside', 'Inside'], ['both', 'Both']], () => rl.side ?? 'outside', (v) => { rl.side = v; dChange(); renderPanel(); })),
+          row('Direction', seg<'raised' | 'carved'>([['raised', 'Raised'], ['carved', 'Carved']], () => (rl.depth < 0 ? 'carved' : 'raised'), (v) => { rl.depth = Math.abs(rl.depth) * (v === 'carved' ? -1 : 1); dChange(); renderPanel(); })),
           row(rl.kind === 'image' ? 'Repeats around' : 'Count around', num(() => rl.count, (v) => (rl.count = v), 1, 200, 1, '', dChange)),
           row('Depth', num(() => rl.depth, (v) => (rl.depth = v), -8, 8, 0.1, 'mm', dChange), Math.abs(rl.depth) > D().wall * 1.5 ? `Deeper than ${(D().wall * 1.5).toFixed(1)} mm thins the wall.` : 'Negative depth carves in.'),
+          custom ? row('Edge softness', num(() => rl.edge ?? 0.15, (v) => (rl.edge = v), 0, 1, 0.01, '', dChange), '0 = knife-sharp edges.') : null,
           custom ? row('Cell height', num(() => rl.aspect ?? 1, (v) => (rl.aspect = v), 0.2, 5, 0.05, '×', dChange)) : null,
           custom ? row('Slant', num(() => rl.slant ?? 0, (v) => (rl.slant = v), -60, 60, 1, '°', dChange)) : null,
           custom ? row('Row offset', num(() => rl.rowShift ?? 0, (v) => (rl.rowShift = v), 0, 1, 0.05, '', dChange)) : null,
@@ -501,6 +504,22 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const btn = (label: string, fn: () => void, on = false) => { const b = h('button', { class: `mxs-btn mxs-sm${on ? ' on' : ''}` }, label); b.onclick = fn; return b; };
   const ibtn = (ic: string, label: string, fn: () => void) => { const b = h('button', { class: 'mxs-ib', title: label, 'aria-label': label }, icon(ic, 14)); b.onclick = fn; return b; };
 
+  /** NexSpiro 'Lines to change' for wall lines: outer wall and inner wall lines from..to of N. */
+  function innerRange(get: () => { innerFrom?: number; innerTo?: number }, after: () => void) {
+    const N = Math.max(1, wallLines(S.design, S.slice) - 1), L = get();
+    const f = h('input', { type: 'number', min: '1', max: String(N), step: '1', value: String(Math.min(N, L.innerFrom ?? 1)), 'aria-label': 'Inner line from' }) as HTMLInputElement;
+    const t = h('input', { type: 'number', min: '1', max: String(N), step: '1', value: String(Math.min(N, L.innerTo ?? N)), 'aria-label': 'Inner line to' }) as HTMLInputElement;
+    const upd = () => { const a = Math.max(1, Math.min(N, +f.value || 1)), b = Math.max(a, Math.min(N, +t.value || N)); L.innerFrom = a; L.innerTo = b >= N ? 99 : b; after(); };
+    f.onchange = t.onchange = upd;
+    return h('div', { class: 'mxs-row' }, h('label', {}, 'Inner lines'), h('div', { class: 'mxs-inl mxs-range' }, f, h('span', {}, 'to'), t, h('span', { class: 'mxs-muted' }, `of ${N}`)));
+  }
+  function linesPicker(get: () => { outer: boolean; inner: boolean; innerFrom: number; innerTo: number }, after: () => void) {
+    const L = get(), N = wallLines(S.design, S.slice);
+    const box = (label: string, g: () => boolean, set: (v: boolean) => void) => h('label', { class: 'mxs-check' }, toggle(g, set, () => { after(); renderPanel(); }), label);
+    return h('div', { class: 'mxs-sub' }, h('b', {}, 'Lines to change'),
+      h('div', { class: 'mxs-checks' }, box('Outer wall', () => L.outer, (v) => (L.outer = v)), N > 1 ? box('Inner walls', () => L.inner, (v) => (L.inner = v)) : h('span', { class: 'mxs-muted' }, 'Single-line wall: thicken the wall for inner lines')),
+      N > 1 && L.inner ? innerRange(() => L, after) : null);
+  }
   function motionPanel() {
     right.append(seg([['body', 'Body (select & apply)'], ['layers', 'Layer zones']], () => S.motionTab, (v) => { S.motionTab = v; renderAll(); }));
     if (S.motionTab === 'body') { bodyPanel(); return; }
@@ -539,7 +558,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       row('Size', num(() => z.size, (v) => (z.size = v), 0, 4, 0.05, '×', zc)),
       row('Spacing', num(() => z.spacing, (v) => (z.spacing = v), 0.2, 5, 0.05, '×', zc)),
       row('Phase', num(() => z.phase, (v) => (z.phase = v), 0, 360, 5, '°', zc)),
-      row('Fade in/out', num(() => z.fade, (v) => (z.fade = v), 0, 20, 0.5, 'mm', zc))));
+      row('Fade in/out', num(() => z.fade, (v) => (z.fade = v), 0, 20, 0.5, 'mm', zc)),
+      linesPicker(() => (z.lines ??= { outer: true, inner: false, innerFrom: 1, innerTo: 99 }), () => { changed(false); previewSoon(); })));
     // layer stacking
     const eff = z.useBrushLayers ? b?.layers ?? null : z.layers;
     const presets = h('div', { class: 'mxs-chips mxs-chips-4' });
@@ -731,7 +751,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const all = h('button', { class: 'mxs-linkb' }, 'All'); all.onclick = () => { view.setKindsVisible({ outer: true, inner: true, base: true, top: true }); renderPanel(); };
     return group('Show lines', h('div', { class: 'mxs-checks mxs-checks-col' }, box('outer', 'Outer wall'), box('inner', 'Inner walls'), box('base', 'Bottom layers'), box('top', 'Top layers'), all),
       h('p', { class: 'mxs-hint' }, 'Hidden lines can’t be picked or brushed, so you can hide the rest and work on one kind at a time. Use the slider under the view to cut down to any layer.'),
-      row('Inner walls', num(() => S.slice.innerWalls, (x) => (S.slice.innerWalls = x), 0, 5, 1, '', () => { changed(false); previewNow(); renderPanel(); })),
+      row('Wall thickness', num(() => S.design.wall, (x) => (S.design.wall = x), 0.4, 8, 0.05, 'mm', () => { changed(true); previewNow(); renderPanel(); }), `${wallLines(S.design, S.slice)} line${wallLines(S.design, S.slice) > 1 ? 's' : ''} per layer at ${S.slice.lineWidth} mm`),
       row('Bottom layers', num(() => S.slice.baseLayers, (x) => (S.slice.baseLayers = x), 0, 12, 1, '', () => { changed(false); previewNow(); renderPanel(); })),
       row('Top layers', num(() => S.slice.topLayers ?? 0, (x) => (S.slice.topLayers = x), 0, 12, 1, '', () => { changed(false); previewNow(); renderPanel(); }), 'Closes the top (lids, pendants printed upright).'));
   }
@@ -768,6 +788,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         row('Layers above', num(() => r.reachUp, (v) => (r.reachUp = v), 0, 400, 1, 'layers', rp)),
         row('Layers below', num(() => r.reachDown, (v) => (r.reachDown = v), 0, 400, 1, 'layers', rp))),
       h('div', { class: 'mxs-sub' }, h('b', {}, 'Lines to change'), h('div', { class: 'mxs-checks' }, lineBox('outer', 'Outer wall'), lineBox('inner', 'Inner walls'), lineBox('base', 'Bottom layers'), lineBox('top', 'Top layers')),
+        r.lines.inner ? innerRange(() => r.lines, () => { rc(); previewSoon(); }) : null,
         row('Wall shape', seg([['all', 'All'], ['curved', 'Curved parts'], ['straight', 'Straight parts']], () => r.wallShape, (v) => { r.wallShape = v; rc(); renderPanel(); })))));
     const opt = (label: string, get: () => number | null, set: (v: number | null) => void, def: number, min: number, max: number, step: number, unit: string) => {
       const on = get() != null;
@@ -816,7 +837,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       row('Line width', num(() => s.lineWidth, (v) => (s.lineWidth = v), 0.3, 2.8, 0.01, 'mm', sc)),
       row('Bottom layers', num(() => s.baseLayers, (v) => (s.baseLayers = v), 0, 12, 1, '', sc)),
       row('Top layers', num(() => s.topLayers ?? 0, (v) => (s.topLayers = v), 0, 12, 1, '', sc)),
-      row('Extra walls', num(() => s.innerWalls, (v) => (s.innerWalls = v), 0, 5, 1, '', sc), s.spiral && s.innerWalls ? 'Spiral vase prints one line above the base.' : undefined)));
+      row('Wall thickness', num(() => S.design.wall, (v) => (S.design.wall = v), 0.4, 8, 0.05, 'mm', () => { changed(true); renderPanel(); }), `${wallLines(S.design, s)} line${wallLines(S.design, s) > 1 ? 's' : ''} per layer${s.spiral && wallLines(S.design, s) > 1 ? ' · spiral vase needs 1 line' : ''}`)));
     right.append(group('Speed & temperature',
       row('Wall speed', num(() => s.speed, (v) => (s.speed = v), 5, 300, 5, 'mm/s', sc)),
       row('First layer', num(() => s.firstLayerSpeed, (v) => (s.firstLayerSpeed = v), 5, 100, 5, 'mm/s', sc)),

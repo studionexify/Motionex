@@ -11,7 +11,7 @@ export interface Rule {
   id: string; name: string; enabled: boolean; color: string;
   rects: Rect[];
   reachUp: number; reachDown: number;          // extra layers above / below the selection
-  lines: { outer: boolean; inner: boolean; base: boolean; top?: boolean };
+  lines: { outer: boolean; inner: boolean; base: boolean; top?: boolean; innerFrom?: number; innerTo?: number };
   wallShape: 'all' | 'curved' | 'straight';
   // change there
   brushId: string | null; size: number; spacing: number; phase: number;

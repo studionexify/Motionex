@@ -11,8 +11,12 @@ export interface Relief {
   kind: ReliefKind; count: number; depth: number; start: number; end: number; transition: number;
   aspect?: number; slant?: number; invert?: boolean; sharp?: number; seed?: number; rowShift?: number;
   map?: HeightMap; mapMode?: 'tile' | 'band'; tilesUp?: number;
+  /** Which face carries the relief. Raised/carved is the sign of depth. */
+  side?: 'outside' | 'inside' | 'both';
+  /** Edge softness 0 (knife-sharp) … 1 (rounded). */
+  edge?: number;
 }
-import { PATTERNS, patternById, sampleMap, type HeightMap } from './reliefs';
+import { PATTERNS, patternById, sampleMap, setEdge, type HeightMap } from './reliefs';
 export type TwistShape = 'linear' | 's' | 'wave';
 
 export interface ProfilePoint { r: number; t: number } // r: 0..1 of max radius, t: 0..1 of height
@@ -99,7 +103,7 @@ export function defaultDesign(family: Family = 'vase'): Design {
   return {
     name: 'Untitled piece', family, outline: o.id, profile: structuredClone(o.pts), smoothing: 0.8,
     height: o.h ?? f.h, maxDiameter: o.d ?? f.d, section: 'round', sides: 8, depth: 0.15, twist: 0, twistShape: 'linear', narrowTop: 0,
-    relief: { kind: 'smooth', count: 0, depth: 0, start: 0, end: 1, transition: 0.06 }, wall: 2.4, openBottom: family === 'shade' || family === 'pendant',
+    relief: { kind: 'smooth', count: 0, depth: 0, start: 0, end: 1, transition: 0.06 }, wall: 1.5, openBottom: family === 'shade' || family === 'pendant',
   };
 }
 
@@ -180,6 +184,7 @@ export function relief(d: Design, t: number, th: number, R: number): number {
         f = sampleMap(rl.map, uu, y);
       } else {
         const p = patternById(rl.kind); if (!p) return 0;
+        setEdge(rl.edge ?? 0.15);
         f = clamp(p.fn(uu, vv, rl.seed ?? 1), 0, 1);
       }
       if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1);
@@ -202,7 +207,20 @@ export function makeSurface(d: Design) {
     const t = clamp(z / d.height, 0, 1);
     const R = profileR(d, t, pts) * Rmax * (1 - d.narrowTop * t);
     const a = th - tw * twistEase(d, t);
-    return Math.max(1, R * sectionMul(d, a) + relief(d, t, a, R));
+    const side = d.relief.side ?? 'outside';
+    return Math.max(1, R * sectionMul(d, a) + (side !== 'inside' ? relief(d, t, a, R) : 0));
+  };
+}
+
+/** Radius (mm) of the inner wall face: the outer shape minus the wall, with the relief inside if asked. */
+export function makeInner(d: Design) {
+  const pts = sortedProfile(d), Rmax = d.maxDiameter / 2, tw = (d.twist * Math.PI) / 180;
+  return (z: number, th: number): number => {
+    const t = clamp(z / d.height, 0, 1);
+    const R = profileR(d, t, pts) * Rmax * (1 - d.narrowTop * t);
+    const a = th - tw * twistEase(d, t);
+    const side = d.relief.side ?? 'outside';
+    return Math.max(0.5, R * sectionMul(d, a) - d.wall - (side !== 'outside' ? relief(d, t, a, R) : 0));
   };
 }
 
@@ -261,3 +279,21 @@ export const ALL_RELIEFS: { id: ReliefKind; name: string; group: string; count: 
   ...PATTERNS.map((p) => ({ id: p.id, name: p.name, group: p.group, count: p.count, depth: p.depth })),
 ];
 export const NOISE_RELIEFS = new Set(['hammered', 'sand', ...PATTERNS.filter((p) => p.noise).map((p) => p.id)]);
+
+/** Mesh grid fine enough for the relief: ~32 samples per pattern cell each way, capped at maxVerts. */
+export function meshGrid(d: Design, maxVerts = 600_000, quick = false) {
+  const rl = d.relief, R = d.maxDiameter / 2;
+  let cols = 160, rows = Math.max(60, Math.round(d.height / 1));
+  if (d.section !== 'round') cols = Math.max(cols, d.sides * 16);
+  if (rl.kind !== 'smooth' && rl.depth !== 0) {
+    const n = Math.max(1, rl.count), cell = (2 * Math.PI * R) / n, vcell = cell * (rl.aspect ?? 1);
+    cols = Math.max(cols, n * 32);
+    rows = Math.max(rows, Math.round(d.height / Math.max(0.15, vcell / 32)));
+    if (rl.kind === 'rings') rows = Math.max(rows, n * 24);
+  }
+  cols = Math.min(cols, 1800); rows = Math.min(rows, 1400);
+  const k = Math.sqrt(Math.min(1, maxVerts / ((rows + 1) * (cols + 1))));
+  if (k < 1) { cols = Math.max(96, Math.floor(cols * k)); rows = Math.max(40, Math.floor(rows * k)); }
+  if (quick) { cols = Math.max(96, cols >> 1); rows = Math.max(40, rows >> 1); }
+  return { rows, cols };
+}

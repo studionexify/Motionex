@@ -1,15 +1,14 @@
 // Binary STL of a Design: outer surface, inner surface (offset inward by the wall), rim, and floor.
-import { makeSurface, type Design } from './design';
+import { makeInner, makeSurface, meshGrid, type Design } from './design';
 
 export function stlFromDesign(d: Design): ArrayBuffer {
-  const surf = makeSurface(d);
-  const rows = Math.min(300, Math.max(60, Math.round(d.height / 0.8)));
-  const cols = Math.min(720, Math.max(180, d.relief.kind === 'smooth' ? 0 : d.relief.count * 8, d.section === 'round' ? 0 : d.sides * 16));
+  const surf = makeSurface(d), inner = makeInner(d);
+  const { rows, cols } = meshGrid(d, 900_000);
   const floor = d.openBottom ? 0 : Math.min(d.height * 0.3, d.wall * 0.6 + 1.2);
-  const P = (i: number, j: number, inner: boolean): [number, number, number] => {
+  const P = (i: number, j: number, isIn: boolean): [number, number, number] => {
     const z = (i / rows) * d.height, th = (j / cols) * Math.PI * 2;
-    const r = Math.max(0.5, surf(z, th) - (inner ? d.wall : 0));
-    return [r * Math.cos(th), r * Math.sin(th), inner ? Math.max(z, floor) : z];
+    const r = isIn ? inner(z, th) : surf(z, th);
+    return [r * Math.cos(th), r * Math.sin(th), isIn ? Math.max(z, floor) : z];
   };
   const tris: [number, number, number][][] = [];
   const quad = (a: number[], b: number[], c: number[], e: number[]) => { tris.push([a, b, c] as never, [a, c, e] as never); };

@@ -278,3 +278,4 @@
 .mxs-dim { opacity: .55; }
 .mxs-inl > select { min-width: 0; max-width: 46%; flex: 0 1 auto; }
 .mxs-inl > .mxs-search { flex: 1; min-width: 0; margin: 0; }
+.mxs-range input[type=number] { width: 52px; }

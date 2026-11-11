@@ -3,7 +3,7 @@
 import { evalCurve } from '../plugins/motionex/curve';
 import { effectPhase } from '../plugins/motionex/modifier';
 import type { LayerEffect, MotionBrush } from '../plugins/motionex/model';
-import { makeSurface, profileR, type Design } from './design';
+import { makeInner, makeSurface, profileR, type Design } from './design';
 import { prepareRules, ruleWeight, type PreparedRule, type Rule } from './rules';
 
 /** One band of layers with its own motion (motion "layer-wise"). Zones are checked top of list first. */
@@ -18,6 +18,8 @@ export interface MotionZone {
   /** Use the motion's own stacking instead of `layers`. */
   useBrushLayers: boolean;
   fade: number;                 // mm faded in/out at the zone edges
+  /** Which wall lines get the motion (NexSpiro 'Lines to change'): outer wall and/or inner wall lines innerFrom..innerTo (1 = next to the outer). */
+  lines?: { outer: boolean; inner: boolean; innerFrom: number; innerTo: number };
 }
 
 export interface SliceSettings {
@@ -55,6 +57,9 @@ export const PRINTERS: { id: string; name: string; bed: [number, number, number]
   { id: 'neptune4pro', name: 'Elegoo Neptune 4 Pro', bed: [230, 230, 265] },
   { id: 'kobra3', name: 'Anycubic Kobra 3', bed: [255, 255, 260] },
 ];
+
+/** Lines per layer for the design's wall thickness. */
+export const wallLines = (d: Design, s: SliceSettings) => Math.max(1, Math.round(d.wall / Math.max(0.1, s.lineWidth)));
 
 export function newZone(brushId: string, from = 0, to = 1): MotionZone {
   return { id: Math.random().toString(36).slice(2, 9), enabled: true, brushId, from, to, size: 1, spacing: 1, phase: 0, layers: null, useBrushLayers: true, fade: 1 };
@@ -118,7 +123,9 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
   const nLayers = Math.max(1, 1 + Math.ceil((H - flh) / lh - 1e-6));
   const active = zones.filter((zn) => zn.enabled && brushes(zn.brushId));
   const minPeriod = Math.min(4, ...active.map((zn) => brushes(zn.brushId)!.period_mm * zn.spacing), ...rules.filter((r) => r.enabled && r.brushId && brushes(r.brushId)).map((r) => brushes(r.brushId!)!.period_mm * r.spacing));
-  const res = minPeriod < 4 || active.length ? Math.min(0.6, Math.max(0.15, minPeriod / 20)) : 0.6;
+  const res0 = minPeriod < 4 || active.length ? Math.min(0.6, Math.max(0.15, minPeriod / 20)) : 0.6;
+  const reliefCell = design.relief.kind !== 'smooth' && design.relief.depth !== 0 ? (TAU * design.maxDiameter / 2) / Math.max(1, design.relief.count) * Math.min(1, design.relief.aspect ?? 1) : Infinity;
+  const res = Math.min(res0, Math.max(0.12, reliefCell / 28));
 
   // piece must fit
   let maxR = 0; for (let i = 0; i <= 20; i++) for (let j = 0; j < 72; j++) maxR = Math.max(maxR, surf((i / 20) * H, (j / 72) * TAU));
@@ -136,6 +143,21 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
   travel(10.6, Math.min(s.bedY - 10, 110)); extrude(10.6, 10, flh, flh, s.lineWidth * 1.5, s.firstLayerSpeed, 1, 'base');
 
   let curTemp = s.nozzleTemp;
+  const walls = wallLines(design, s);
+  if (s.spiral && walls > 1) warnings.push(`Spiral vase needs a single-line wall: this ${design.wall} mm wall prints as ${walls} lines per layer, so it is sliced layer by layer.`);
+  const innerRaw = makeInner(design);
+  const inner = s.flip ? (z: number, th: number) => innerRaw(H - z, th) : innerRaw;
+  /** Centre line of wall line k (0 = outer): from the outer surface to the inner surface. */
+  const wallLoop = (zz: number, nn: number, k: number): [number, number][] => {
+    const w = s.lineWidth, out: [number, number][] = [];
+    for (let i = 0; i < nn; i++) {
+      const th = (i / nn) * TAU, ro = surf(zz, th), ri = inner(zz, th);
+      const a = ro - w / 2, b = Math.min(a, ri + w / 2);
+      const r = walls === 1 ? a : a + (b - a) * (k / (walls - 1));
+      out.push([Math.max(0.3, r) * Math.cos(th), Math.max(0.3, r) * Math.sin(th)]);
+    }
+    return out;
+  };
   const isBaseLayer = (li: number) => li < baseOn;
   const baseOn = !design.openBottom && !s.flip ? s.baseLayers : design.openBottom ? 0 : s.baseLayers;
   for (let li = 0; li < nLayers; li++) {
@@ -145,18 +167,18 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     layerStart.push(segs.length); layerZ.push(zTop); curLayer = li;
     const zd = s.flip ? H - zTop : zTop;
     const prep = prepareRules(rules, zd, s.reachLayerHeight ?? lh);
-    const kindOk = (p: PreparedRule, k: 'outer' | 'inner' | 'base' | 'top') => !!p.rule.lines[k];
+    const kindOk = (p: PreparedRule, k: 'outer' | 'inner' | 'base' | 'top', wi: number) => !!p.rule.lines[k] && (k !== 'inner' || (wi >= (p.rule.lines.innerFrom ?? 1) && wi <= (p.rule.lines.innerTo ?? 99)));
     /** Rule effect at a point: speed / flow multipliers, the strongest motion rule and its weight. */
-    const ruleAt = (k: 'outer' | 'inner' | 'base' | 'top', a: number, r: number, curved: boolean) => {
+    const ruleAt = (k: 'outer' | 'inner' | 'base' | 'top', a: number, r: number, curved: boolean, wi: number) => {
       let sp = 1, fl = 1, mw = 0, mr: Rule | null = null, any = false, idx = -1;
       for (const p of prep) {
-        if (!kindOk(p, k)) continue;
+        if (!kindOk(p, k, wi)) continue;
         if (p.rule.wallShape !== 'all' && (p.rule.wallShape === 'curved') !== curved) continue;
         const w = ruleWeight(p, zd, a, r); if (w <= 0) continue;
         any = true; if (w >= 0.5) idx = rules.indexOf(p.rule);
         if (p.rule.speed != null) sp = sp * (1 - w) + (p.rule.speed / 100) * w;
         if (p.rule.flow != null) fl = fl * (1 - w) + (p.rule.flow / 100) * w;
-        if (p.rule.brushId && k === 'outer') { mr = p.rule; mw = w; }
+        if (p.rule.brushId && (k === 'outer' || k === 'inner')) { mr = p.rule; mw = w; }
       }
       return { sp, fl, mr, mw, any, idx };
     };
@@ -169,40 +191,21 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     if (li === 1) emit(`M106 S${Math.round((s.fan / 100) * 255)}`);
     const isTop = !isBaseLayer(li) && s.topLayers > 0 && li >= nLayers - s.topLayers && !s.flip;
     const isBase = li < baseOn || isTop;
-    const spiralNow = s.spiral && !isBase && li > 0;
+    const spiralNow = s.spiral && walls === 1 && !isBase && li > 0;
     const t = zTop / H;
 
-    // plain inner walls and solid base rings (coarse loop)
-    if (!spiralNow) {
-      const plain = loopAt(surf, zTop, 240);
-      const rings: [number, number][][] = [];
-      for (let k = 1; k <= s.innerWalls; k++) rings.push(inset(plain, k * s.lineWidth));
-      if (isBase) { let r0 = 0; for (const [px, py] of plain) r0 = Math.max(r0, Math.hypot(px, py)); for (let k = s.innerWalls + 1; k * s.lineWidth < r0 - s.lineWidth / 2; k++) rings.push(inset(plain, k * s.lineWidth)); }
-      rings.forEach((ring, ri) => {
-        travel(cx + ring[0][0], cy + ring[0][1], zTop);
-        const k = isBase && ri >= s.innerWalls ? (isTop ? 'top' : 'base') : 'inner';
-        for (let i = 1; i <= ring.length; i++) {
-          const p = ring[i % ring.length];
-          let sp = 1, fl = 1;
-          if (prep.length) { const q = ruleAt(k, frac(Math.atan2(p[1], p[0]) / TAU), Math.hypot(p[0], p[1]), true); sp = q.sp; fl = q.fl; curRuled = q.any; curRule = q.idx; }
-          extrude(cx + p[0], cy + p[1], zTop, h, s.lineWidth, speed * sp, fl, k);
-        }
-        curRuled = false; curRule = -1;
-      });
-    }
-
-    // outer wall: zone for this layer (first match wins)
+    // walls: N lines from the outer surface to the inner surface (wall thickness / line width)
     const zone = active.find((zn) => t >= zn.from - 1e-9 && t <= zn.to + 1e-9) ?? null;
     const brush = zone ? brushes(zone.brushId)! : null;
     const amp = brush ? brush.amplitude * zone!.size : 0, zamp = brush ? (brush.z_amplitude ?? 0) * zone!.size : 0;
     const period = brush ? Math.max(0.2, brush.period_mm * zone!.spacing) : 1;
-    // circumference approx for sample count / repeats
     const approxR = profileR(design, s.flip ? 1 - t : t) * design.maxDiameter / 2;
     const n = Math.max(120, Math.ceil((TAU * approxR) / res));
-    const loop = loopAt(surf, zTop, n);
-    let L = 0; for (let i = 0; i < n; i++) { const a = loop[i], b = loop[(i + 1) % n]; L += Math.hypot(b[0] - a[0], b[1] - a[1]); }
+    const loops: [number, number][][] = [];
+    for (let k = 0; k < walls; k++) loops.push(wallLoop(zTop, n, k));
+    const outer = loops[0];
+    let L = 0; for (let i = 0; i < n; i++) { const a = outer[i], b = outer[(i + 1) % n]; L += Math.hypot(b[0] - a[0], b[1] - a[1]); }
     const reps = brush && brush.repeat_mode === 'stretch' ? Math.max(1, Math.round(L / period)) : L / period;
-    const per = L / reps;
     let fade = 0, phase = 0;
     if (brush && zone) {
       const effect = zone.useBrushLayers ? brush.layers ?? null : zone.layers;
@@ -216,55 +219,85 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
         if (effect?.cross && li % 2) phase = ((brush.phase_deg ?? 0) + zone.phase - lp) / 360;
       }
     }
-    let acc = 0;
-    for (let i = 0; i <= n; i++) {
-      const p = loop[i % n], pn = loop[(i + 1) % n], pp = loop[(i - 1 + n) % n];
-      if (i > 0) acc += Math.hypot(p[0] - pp[0], p[1] - pp[1]);
-      let tx = pn[0] - pp[0], ty = pn[1] - pp[1]; const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
-      const nx = ty, ny = -tx;
-      let ox = 0, oy = 0, oz = 0, flow = 1, sp = 1;
-      if (brush && fade > 0) {
-        const u = frac(acc / per + phase);
-        const lat = evalCurve(brush.curves.lateral_offset, u) * amp * fade, al = evalCurve(brush.curves.along_offset, u) * amp * fade;
-        oz = evalCurve(brush.curves.z_offset, u) * zamp * fade;
-        flow = Math.min(brush.limits.max_flow_mult, Math.max(brush.limits.min_flow_mult, 1 + (evalCurve(brush.curves.extrusion_mult, u) - 1) * fade));
-        sp = Math.max(0.1, 1 + (evalCurve(brush.curves.speed_mult, u) - 1) * fade);
-        ox = nx * lat + tx * al; oy = ny * lat + ty * al;
-        maxOff = Math.max(maxOff, Math.hypot(lat, al));
-      }
-      let moving = !!brush && fade > 0;
-      curRuled = false; curRule = -1;
-      if (prep.length && li >= Math.max(1, baseOn)) {
-        // turn angle per mm on the plain loop: curved vs straight wall
-        const ax = p[0] - pp[0], ay = p[1] - pp[1], bx = pn[0] - p[0], by = pn[1] - p[1];
-        const turn = Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by)) / Math.max(1e-6, (Math.hypot(ax, ay) + Math.hypot(bx, by)) / 2);
-        const q = ruleAt('outer', frac(Math.atan2(p[1], p[0]) / TAU), Math.hypot(p[0], p[1]), turn > 1 / 150);
-        curRuled = q.any; curRule = q.idx;
-        sp *= q.sp; flow *= q.fl;
-        if (q.mr && q.mw > 0) {
-          const rb = brushes(q.mr.brushId!);
-          if (rb) {
-            const rp = Math.max(0.2, rb.period_mm * q.mr.spacing);
-            const eff = q.mr.useBrushLayers ? rb.layers ?? null : q.mr.layers;
-            const lp = effectPhase(eff, li);
-            if (lp !== null) {
-              const u = frac(acc / rp + ((rb.phase_deg ?? 0) + q.mr.phase + (eff?.cross && li % 2 ? -lp : lp)) / 360);
-              const ra = rb.amplitude * q.mr.size, w = q.mw;
-              const lat = evalCurve(rb.curves.lateral_offset, u) * ra, al = evalCurve(rb.curves.along_offset, u) * ra;
-              ox = ox * (1 - w) + (nx * lat + tx * al) * w; oy = oy * (1 - w) + (ny * lat + ty * al) * w;
-              oz = oz * (1 - w) + evalCurve(rb.curves.z_offset, u) * (rb.z_amplitude ?? 0) * q.mr.size * w;
-              flow = flow * (1 - w) + Math.min(rb.limits.max_flow_mult, Math.max(rb.limits.min_flow_mult, evalCurve(rb.curves.extrusion_mult, u))) * q.fl * w;
-              sp = sp * (1 - w) + Math.max(0.1, evalCurve(rb.curves.speed_mult, u)) * q.sp * w;
-              maxOff = Math.max(maxOff, Math.hypot(lat, al) * w);
-              moving = true;
+    const zoneOn = (k: number) => { const ln = zone?.lines ?? { outer: true, inner: false, innerFrom: 1, innerTo: 99 }; return k === 0 ? ln.outer : ln.inner && k >= ln.innerFrom && k <= ln.innerTo; };
+
+    // inner lines first, outer wall last (cleanest outside)
+    for (let k = walls - 1; k >= 0; k--) {
+      const loop = loops[k];
+      const lk: 'outer' | 'inner' = k === 0 ? 'outer' : 'inner';
+      let Lk = 0; for (let i = 0; i < n; i++) { const a = loop[i], b = loop[(i + 1) % n]; Lk += Math.hypot(b[0] - a[0], b[1] - a[1]); }
+      const zOnK = zoneOn(k);
+      let acc = 0;
+      for (let i = 0; i <= n; i++) {
+        const p = loop[i % n], pn = loop[(i + 1) % n], pp = loop[(i - 1 + n) % n];
+        if (i > 0) acc += Math.hypot(p[0] - pp[0], p[1] - pp[1]);
+        const along = Lk > 0 ? acc / Lk : 0;           // 0..1 round the loop: same phase on every line
+        let tx = pn[0] - pp[0], ty = pn[1] - pp[1]; const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+        const nx = ty, ny = -tx;
+        let ox = 0, oy = 0, oz = 0, flow = 1, sp = 1;
+        let moving = false;
+        if (brush && fade > 0 && zOnK) {
+          const u = frac(along * reps + phase);
+          const lat = evalCurve(brush.curves.lateral_offset, u) * amp * fade, al = evalCurve(brush.curves.along_offset, u) * amp * fade;
+          oz = evalCurve(brush.curves.z_offset, u) * zamp * fade;
+          flow = Math.min(brush.limits.max_flow_mult, Math.max(brush.limits.min_flow_mult, 1 + (evalCurve(brush.curves.extrusion_mult, u) - 1) * fade));
+          sp = Math.max(0.1, 1 + (evalCurve(brush.curves.speed_mult, u) - 1) * fade);
+          ox = nx * lat + tx * al; oy = ny * lat + ty * al;
+          maxOff = Math.max(maxOff, Math.hypot(lat, al));
+          moving = true;
+        }
+        curRuled = false; curRule = -1;
+        if (prep.length && li >= Math.max(1, baseOn)) {
+          const ax = p[0] - pp[0], ay = p[1] - pp[1], bx = pn[0] - p[0], by = pn[1] - p[1];
+          const turn = Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by)) / Math.max(1e-6, (Math.hypot(ax, ay) + Math.hypot(bx, by)) / 2);
+          const q = ruleAt(lk, frac(Math.atan2(p[1], p[0]) / TAU), Math.hypot(p[0], p[1]), turn > 1 / 150, k);
+          curRuled = q.any; curRule = q.idx;
+          sp *= q.sp; flow *= q.fl;
+          if (q.mr && q.mw > 0) {
+            const rb = brushes(q.mr.brushId!);
+            if (rb) {
+              const rp = Math.max(0.2, rb.period_mm * q.mr.spacing);
+              const rr = rb.repeat_mode === 'stretch' ? Math.max(1, Math.round(L / rp)) : L / rp;
+              const eff = q.mr.useBrushLayers ? rb.layers ?? null : q.mr.layers;
+              const lp = effectPhase(eff, li);
+              if (lp !== null) {
+                const u = frac(along * rr + ((rb.phase_deg ?? 0) + q.mr.phase + (eff?.cross && li % 2 ? -lp : lp)) / 360);
+                const ra = rb.amplitude * q.mr.size, w = q.mw;
+                const lat = evalCurve(rb.curves.lateral_offset, u) * ra, al = evalCurve(rb.curves.along_offset, u) * ra;
+                ox = ox * (1 - w) + (nx * lat + tx * al) * w; oy = oy * (1 - w) + (ny * lat + ty * al) * w;
+                oz = oz * (1 - w) + evalCurve(rb.curves.z_offset, u) * (rb.z_amplitude ?? 0) * q.mr.size * w;
+                flow = flow * (1 - w) + Math.min(rb.limits.max_flow_mult, Math.max(rb.limits.min_flow_mult, evalCurve(rb.curves.extrusion_mult, u))) * q.fl * w;
+                sp = sp * (1 - w) + Math.max(0.1, evalCurve(rb.curves.speed_mult, u)) * q.sp * w;
+                maxOff = Math.max(maxOff, Math.hypot(lat, al) * w);
+                moving = true;
+              }
             }
           }
         }
+        const zz = spiralNow ? zTop - h + h * along : zTop;
+        const px = cx + p[0] + ox, py = cy + p[1] + oy, pz = Math.max(0.05, zz + oz);
+        if (i === 0) { travel(px, py, spiralNow ? z : zTop); continue; }
+        extrude(px, py, pz, h, s.lineWidth, speed * sp, flow, k > 0 ? 'inner' : moving ? 'motion' : 'wall');
       }
-      const zz = spiralNow ? zTop - h + h * (acc / L) : zTop;
-      const px = cx + p[0] + ox, py = cy + p[1] + oy, pz = Math.max(0.05, zz + oz);
-      if (i === 0) { travel(px, py, spiralNow ? z : zTop); continue; }
-      extrude(px, py, pz, h, s.lineWidth, speed * sp, flow, moving ? 'motion' : 'wall');
+    }
+    curRuled = false; curRule = -1;
+
+    // solid bottom / top: rings inside the innermost wall line
+    if (isBase && !spiralNow) {
+      const inner = wallLoop(zTop, 240, walls - 1);
+      let r0 = 0; for (const [px, py] of inner) r0 = Math.max(r0, Math.hypot(px, py));
+      const kind = isTop ? 'top' : 'base';
+      for (let j = 1; j * s.lineWidth < r0 - s.lineWidth / 2; j++) {
+        const ring = inset(inner, j * s.lineWidth);
+        travel(cx + ring[0][0], cy + ring[0][1], zTop);
+        for (let i = 1; i <= ring.length; i++) {
+          const p = ring[i % ring.length];
+          let sp = 1, fl = 1;
+          if (prep.length) { const q = ruleAt(kind, frac(Math.atan2(p[1], p[0]) / TAU), Math.hypot(p[0], p[1]), true, 0); sp = q.sp; fl = q.fl; curRuled = q.any; curRule = q.idx; }
+          extrude(cx + p[0], cy + p[1], zTop, h, s.lineWidth, speed * sp, fl, kind);
+        }
+        curRuled = false; curRule = -1;
+      }
     }
   }
   emit(`; filament used: ${(eTot / 1000).toFixed(3)} m`);
