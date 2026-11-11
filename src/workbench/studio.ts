@@ -7,7 +7,9 @@ import type { LayerEffect, LayerMode, MotionBrush, WaveShape } from '../plugins/
 import { effectPhase } from '../plugins/motionex/modifier';
 import { defaultDesign, estimate, makeSurface, FAMILIES, OUTLINES, profileR, RELIEFS, SECTIONS, surprise, type Design, type Family, type ProfilePoint } from './design';
 import { DEFAULT_SLICE, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
-import { StudioView, type ColorBy } from './viewport';
+import { StudioView, type ColorBy, type PathStyle } from './viewport';
+import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
+import { physicsFor, simulate, type Physics, type PrintSim } from './physics';
 import { stlFromDesign } from './stl';
 
 // ───────── host (printer connections; only the desktop app provides one)
@@ -22,11 +24,14 @@ export interface StudioHost {
 export interface StudioOptions { host?: StudioHost; download?: boolean }
 
 // ───────── state
-interface Saved { id: string; name: string; design: Design; zones: MotionZone[]; at: number }
+interface Saved { id: string; name: string; design: Design; zones: MotionZone[]; rules?: Rule[]; at: number }
+type Tool = 'orbit' | 'line' | 'segment' | 'brush' | 'box' | 'lasso' | 'band';
 interface State {
   step: 'design' | 'motion' | 'slice';
   designTab: 'shape' | 'relief' | 'look';
   design: Design; zones: MotionZone[]; activeZone: string | null; slice: SliceSettings;
+  motionTab: 'body' | 'layers'; rules: Rule[]; activeRule: string | null; tool: Tool; brushR: number; erase: boolean;
+  physics: Physics; pathStyle: PathStyle; colorBy: ColorBy; libOpen: Record<string, boolean>;
   printer: { kind: 'profile' | 'device'; id: string } | null;
   color: string; theme: 'light' | 'dark' | null;
   rail: 'studio' | 'library' | 'printers' | 'help';
@@ -72,18 +77,21 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const S: State = {
     step: 'design', designTab: 'shape', design: saved.design ?? defaultDesign('vase'), zones: saved.zones ?? [], activeZone: null,
     slice: { ...DEFAULT_SLICE, ...saved.slice }, printer: saved.printer ?? null, color: saved.color ?? '#ece6dc', theme: saved.theme ?? null, rail: 'studio',
+    motionTab: saved.motionTab ?? 'body', rules: saved.rules ?? [], activeRule: null, tool: 'orbit', brushR: 6, erase: false,
+    physics: { ...physicsFor(saved.slice?.printer ?? DEFAULT_SLICE.printer), ...saved.physics }, pathStyle: saved.pathStyle ?? 'ribbons', colorBy: saved.colorBy ?? 'feature', libOpen: saved.libOpen ?? {},
   };
+  S.activeRule = S.rules[0]?.id ?? null;
   S.activeZone = S.zones[0]?.id ?? null;
-  let result: GenResult | null = null, stale = true, showModel = true, showToolpath = false;
+  let result: GenResult | null = null, sim: PrintSim | null = null, stale = true, showModel = true, showToolpath = false;
   const brushOf = (id: string): MotionBrush | undefined => PRESETS.find((b) => b.id === id);
-  const persist = () => ls.set(KEY, { design: S.design, zones: S.zones, slice: S.slice, printer: S.printer, color: S.color, theme: S.theme });
+  const persist = () => ls.set(KEY, { design: S.design, zones: S.zones, rules: S.rules, slice: S.slice, printer: S.printer, color: S.color, theme: S.theme, motionTab: S.motionTab, physics: S.physics, pathStyle: S.pathStyle, colorBy: S.colorBy, libOpen: S.libOpen });
 
   // undo / redo over design + zones
-  const past: string[] = [], future: string[] = []; let lastSnap = JSON.stringify([S.design, S.zones]), snapTimer = 0;
-  const snapshot = () => { clearTimeout(snapTimer); snapTimer = window.setTimeout(() => { const now = JSON.stringify([S.design, S.zones]); if (now !== lastSnap) { past.push(lastSnap); if (past.length > 80) past.shift(); future.length = 0; lastSnap = now; updateTop(); } }, 350); };
-  const restore = (snap: string) => { const [d, z] = JSON.parse(snap); S.design = d; S.zones = z; lastSnap = snap; changed(true); renderAll(); };
-  const undo = () => { if (!past.length) return; future.push(JSON.stringify([S.design, S.zones])); restore(past.pop()!); };
-  const redo = () => { if (!future.length) return; past.push(JSON.stringify([S.design, S.zones])); restore(future.pop()!); };
+  const past: string[] = [], future: string[] = []; let lastSnap = JSON.stringify([S.design, S.zones, S.rules]), snapTimer = 0;
+  const snapshot = () => { clearTimeout(snapTimer); snapTimer = window.setTimeout(() => { const now = JSON.stringify([S.design, S.zones, S.rules]); if (now !== lastSnap) { past.push(lastSnap); if (past.length > 80) past.shift(); future.length = 0; lastSnap = now; updateTop(); } }, 350); };
+  const restore = (snap: string) => { const [d, z, r] = JSON.parse(snap); S.design = d; S.zones = z; S.rules = r ?? []; lastSnap = snap; changed(true); renderAll(); };
+  const undo = () => { if (!past.length) return; future.push(JSON.stringify([S.design, S.zones, S.rules])); restore(past.pop()!); };
+  const redo = () => { if (!future.length) return; past.push(JSON.stringify([S.design, S.zones, S.rules])); restore(future.pop()!); };
 
   root.classList.add('mxs'); root.innerHTML = '';
   if (S.theme) root.dataset.theme = S.theme;
@@ -140,6 +148,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     S.printer = { kind, id };
     const bed = bedOfPrinter();
     S.slice = { ...S.slice, bedX: bed[0], bedY: bed[1], printer: kind === 'profile' ? id : S.slice.printer };
+    S.physics = physicsFor(S.slice.printer);
     changed(false); renderAll();
   };
   printerSel.onchange = () => { if (printerSel.value === '__manage') { printerSel.value = S.printer ? `${S.printer.kind}:${S.printer.id}` : ''; host?.manage(); return; } choosePrinter(printerSel.value); };
@@ -172,10 +181,16 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const offHost = host?.subscribe(() => { renderPrinterSel(); renderGate(); if (S.step === 'slice') renderPanel(); if (S.rail === 'printers') renderPage(); }) ?? (() => {});
 
   // ───────── change handling
-  let meshTimer = 0;
+  let meshTimer = 0, fullTimer = 0, meshRaf = 0;
+  /** Coarse mesh on the next frame, full mesh once edits pause: no lag while dragging sliders. */
+  function liveMesh() {
+    cancelAnimationFrame(meshRaf); clearTimeout(fullTimer);
+    meshRaf = requestAnimationFrame(() => view.setDesign(S.design, S.color, true));
+    fullTimer = window.setTimeout(() => view.setDesign(S.design, S.color), 220);
+  }
   function changed(designChanged: boolean) {
     persist(); snapshot();
-    if (designChanged) { clearTimeout(meshTimer); meshTimer = window.setTimeout(() => view.setDesign(S.design, S.color), 30); }
+    if (designChanged) liveMesh();
     if (result) { stale = true; }
     renderEstimate(); renderViewBar(); updateTop();
   }
@@ -183,10 +198,11 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const doSlice = () => {
     staleTag.textContent = 'Slicing…'; staleTag.hidden = false;
     setTimeout(() => {
-      result = slice(S.design, S.slice, S.zones, brushOf);
+      result = slice(S.design, S.slice, S.zones, brushOf, S.rules);
+      sim = simulate(result, S.slice, S.physics);
       stale = false; showToolpath = true;
-      view.maxLayer = Infinity;
-      view.setToolpath(result, [S.slice.bedX, S.slice.bedY]);
+      view.maxLayer = Infinity; view.flip = S.slice.flip; view.style = S.pathStyle; view.colorBy = S.colorBy;
+      view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim);
       view.setVisibility(showModel = false, true);
       renderAll();
     }, 20);
@@ -197,7 +213,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const lib = lsArr<Saved>(LIB);
     const id = (S.design as Design & { _id?: string })._id ?? Math.random().toString(36).slice(2, 10);
     (S.design as Design & { _id?: string })._id = id;
-    const entry: Saved = { id, name: S.design.name, design: structuredClone(S.design), zones: structuredClone(S.zones), at: Date.now() };
+    const entry: Saved = { id, name: S.design.name, design: structuredClone(S.design), zones: structuredClone(S.zones), rules: structuredClone(S.rules), at: Date.now() };
     ls.set(LIB, [entry, ...lib.filter((x) => x.id !== id)].slice(0, 60));
     flash(saveB, 'Saved');
   };
@@ -250,31 +266,52 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     }
     if (S.step === 'motion') {
       const zone = S.zones.find((z) => z.id === S.activeZone) ?? null;
+      const rule = S.rules.find((r) => r.id === S.activeRule) ?? null;
+      const target = S.motionTab === 'body' ? rule : zone;
+      const curId = S.motionTab === 'body' ? rule?.brushId : zone?.brushId;
       const search = h('input', { type: 'search', class: 'mxs-search', placeholder: 'Search motions…', 'aria-label': 'Search motions', value: libQuery }) as HTMLInputElement;
       const list = h('div', { class: 'mxs-lib' });
+      const pick = (b: MotionBrush) => {
+        if (S.motionTab === 'body') {
+          let r = S.rules.find((x) => x.id === S.activeRule);
+          if (!r) { r = newRule(S.rules.length + 1); S.rules.push(r); S.activeRule = r.id; }
+          r.brushId = b.id;
+        } else {
+          const z = S.zones.find((x) => x.id === S.activeZone);
+          if (z) z.brushId = b.id; else { const nz = newZone(b.id); S.zones.push(nz); S.activeZone = nz.id; }
+        }
+        changed(false); renderStrip(); renderPanel(); paintRules();
+      };
       const fill = () => {
         list.innerHTML = '';
         const q = libQuery.toLowerCase();
         const cats = [...new Set(PRESETS.map((b) => b.category ?? 'Other'))];
         for (const c of cats) {
-          const items = PRESETS.filter((b) => (b.category ?? 'Other') === c && (!q || b.name.toLowerCase().includes(q) || (b.description ?? '').toLowerCase().includes(q)));
+          const items = PRESETS.filter((b) => (b.category ?? 'Other') === c && (!q || b.name.toLowerCase().includes(q) || (b.description ?? '').toLowerCase().includes(q) || c.toLowerCase().includes(q)));
           if (!items.length) continue;
-          list.append(h('div', { class: 'mxs-cat' }, c));
-          for (const b of items) {
-            const th = h('canvas', { class: 'mxs-thumb', width: '120', height: '44' }) as HTMLCanvasElement; drawThumb(th, b);
-            const btn = h('button', { class: `mxs-mot${zone?.brushId === b.id ? ' on' : ''}`, title: b.description ?? '' }, th, h('span', {}, h('b', {}, b.name), h('small', {}, b.description ?? '')));
-            btn.onclick = () => {
-              const z = S.zones.find((x) => x.id === S.activeZone);
-              if (z) z.brushId = b.id; else { const nz = newZone(b.id); S.zones.push(nz); S.activeZone = nz.id; }
-              changed(false); renderStrip(); renderPanel();
-            };
-            list.append(btn);
-          }
+          const hasCur = items.some((b) => b.id === curId);
+          const open = !!q || (S.libOpen[c] ?? hasCur);
+          const det = h('details', { class: 'mxs-libg' }) as HTMLDetailsElement; det.open = open;
+          const sumTh = h('canvas', { class: 'mxs-gthumb', width: '48', height: '20' }) as HTMLCanvasElement; drawThumb(sumTh, items[0]);
+          det.append(h('summary', {}, sumTh, h('b', {}, c), h('small', {}, String(items.length))));
+          det.ontoggle = () => { if (!q) { S.libOpen[c] = det.open; persist(); } if (det.open && !det.dataset.filled) fillGroup(); };
+          const fillGroup = () => {
+            det.dataset.filled = '1';
+            for (const b of items) {
+              const th = h('canvas', { class: 'mxs-thumb', width: '120', height: '44' }) as HTMLCanvasElement; drawThumb(th, b);
+              const btn = h('button', { class: `mxs-mot${curId === b.id ? ' on' : ''}`, title: b.description ?? '' }, th, h('span', {}, h('b', {}, b.name), h('small', {}, b.description ?? '')));
+              btn.onclick = () => pick(b);
+              det.append(btn);
+            }
+          };
+          if (open) fillGroup();
+          list.append(det);
         }
       };
       search.oninput = () => { libQuery = search.value; fill(); };
-      strip.append(h('div', { class: 'mxs-strip-head' }, h('b', {}, 'Motions library'), h('small', {}, `${PRESETS.length}`)),
-        h('p', { class: 'mxs-hint' }, zone ? `Click a motion to use it in zone “${zoneLabel(zone)}”.` : 'Click a motion to add it to the whole piece.'), search, list);
+      const allB = h('button', { class: 'mxs-linkb' }, 'Collapse all'); allB.onclick = () => { for (const c of new Set(PRESETS.map((b) => b.category ?? 'Other'))) S.libOpen[c] = false; persist(); fill(); };
+      strip.append(h('div', { class: 'mxs-strip-head' }, h('b', {}, 'Motions library'), h('small', {}, `${PRESETS.length}`), h('span', { class: 'mxs-grow' }), allB),
+        h('p', { class: 'mxs-hint' }, S.motionTab === 'body' ? (target ? `Click a motion to use it in “${(target as Rule).name}”.` : 'Click a motion to start a new selection rule.') : zone ? `Click a motion to use it in zone “${zoneLabel(zone)}”.` : 'Click a motion to add it to the whole piece.'), search, list);
       fill();
       requestAnimationFrame(() => list.querySelector('.mxs-mot.on')?.scrollIntoView({ block: 'center' }));
       return;
@@ -387,6 +424,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const ibtn = (ic: string, label: string, fn: () => void) => { const b = h('button', { class: 'mxs-ib', title: label, 'aria-label': label }, icon(ic, 14)); b.onclick = fn; return b; };
 
   function motionPanel() {
+    right.append(seg([['body', 'Body (select & apply)'], ['layers', 'Layer zones']], () => S.motionTab, (v) => { S.motionTab = v; renderAll(); }));
+    if (S.motionTab === 'body') { bodyPanel(); return; }
     const H = S.design.height;
     const list = h('div', { class: 'mxs-zones' });
     S.zones.forEach((z, i) => {
@@ -451,6 +490,184 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     right.append(lg);
   }
 
+  // ───────── body rules (NexSpiro select & apply)
+  const lhNow = () => S.slice.layerHeight;
+  const activeRule = () => S.rules.find((r) => r.id === S.activeRule) ?? null;
+  const ensureRule = () => { let r = activeRule(); if (!r) { r = newRule(S.rules.length + 1); S.rules.push(r); S.activeRule = r.id; renderPanel(); } return r; };
+  function paintRules() {
+    if (S.step !== 'motion' || S.motionTab !== 'body' || !S.rules.some((r) => r.enabled && r.rects.length)) { view.setHighlight(null); return; }
+    const base = hexRgb(S.color);
+    const cols = new Map(S.rules.map((r) => [r.id, hexRgb(r.color)]));
+    let lastZ = NaN, prep: ReturnType<typeof prepareRules> = [];
+    view.setHighlight((z, a, r) => {
+      if (z !== lastZ) { lastZ = z; prep = prepareRules(S.rules, z, lhNow()); }
+      if (!prep.length) return null;
+      let out: [number, number, number] | null = null;
+      for (const p of prep) {
+        const w = ruleWeight(p, z, a, r); if (w <= 0) continue;
+        const c = cols.get(p.rule.id)!, k = w * (p.rule.id === S.activeRule ? 0.9 : 0.55), b: [number, number, number] = out ?? base;
+        out = [b[0] + (c[0] - b[0]) * k, b[1] + (c[1] - b[1]) * k, b[2] + (c[2] - b[2]) * k];
+      }
+      return out;
+    });
+  }
+  let paintRaf = 0;
+  const paintSoon = () => { cancelAnimationFrame(paintRaf); paintRaf = requestAnimationFrame(paintRules); };
+
+  // tools in the 3D view
+  const toolBar = h('div', { class: 'mxs-tools' });
+  const marquee = h('div', { class: 'mxs-marquee' }); marquee.hidden = true;
+  const lassoSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); lassoSvg.setAttribute('class', 'mxs-lasso');
+  const lassoPath = document.createElementNS('http://www.w3.org/2000/svg', 'polyline'); lassoSvg.append(lassoPath);
+  stage.append(toolBar, marquee, lassoSvg);
+  const TOOLS: [Tool, string, string][] = [
+    ['orbit', 'Orbit', 'Turn the view (left drag). In the other tools, right drag turns.'],
+    ['line', 'Line', 'Click a printed line to select the whole line. Alt+click selects just that segment.'],
+    ['segment', 'Segment', 'Click to select a short segment of one line.'],
+    ['brush', 'Brush', 'Paint over the surface.'],
+    ['box', 'Box', 'Drag a box: selects the visible surface inside it.'],
+    ['lasso', 'Lasso', 'Draw round an area: selects the visible surface inside it.'],
+    ['band', 'Band', 'Drag up or down the piece: selects every line in that height band.'],
+  ];
+  function renderTools() {
+    const show = S.rail === 'studio' && S.step === 'motion' && S.motionTab === 'body';
+    toolBar.hidden = !show;
+    view.setToolMode(show && S.tool !== 'orbit');
+    view.canvas.style.cursor = show && S.tool !== 'orbit' ? 'crosshair' : '';
+    if (!show) return;
+    toolBar.innerHTML = '';
+    for (const [id, label, tip] of TOOLS) { const b = h('button', { class: `mxs-tool${S.tool === id ? ' on' : ''}`, title: tip }, label); b.onclick = () => { S.tool = id; renderTools(); }; toolBar.append(b); }
+    const er = h('button', { class: `mxs-tool${S.erase ? ' on mxs-erase' : ''}`, title: 'Take away from the selection (or hold Ctrl)' }, 'Erase'); er.onclick = () => { S.erase = !S.erase; renderTools(); };
+    toolBar.append(h('span', { class: 'mxs-tsep' }), er);
+    if (S.tool === 'brush' || S.tool === 'segment') {
+      const r = h('input', { type: 'range', min: '1', max: '40', step: '0.5', value: String(S.brushR), 'aria-label': 'Brush size', title: 'Brush size (mm)' }) as HTMLInputElement;
+      const lbl = h('span', { class: 'mxs-tlbl' }, `${S.brushR} mm`);
+      r.oninput = () => { S.brushR = +r.value; lbl.textContent = `${S.brushR} mm`; };
+      toolBar.append(h('span', { class: 'mxs-tsep' }), r, lbl);
+    }
+    const rule = activeRule();
+    toolBar.append(h('span', { class: 'mxs-tsep' }), h('span', { class: 'mxs-tlbl' }, rule ? h('i', { class: 'mxs-rdot', style: `background:${rule.color}` }) : '', rule ? rule.name : 'New selection'));
+  }
+  const ring = (z: number, neg: boolean) => ({ z0: z - lhNow() / 2, z1: z + lhNow() / 2, a0: 0, a1: 1, ...(neg ? { neg } : {}) });
+  const dab = (hit: { z: number; a: number; r: number }, R: number, neg: boolean) => { const da = R / (Math.PI * 2 * Math.max(1, hit.r)); return { z0: hit.z - R, z1: hit.z + R, a0: hit.a - da, a1: hit.a + da, ...(neg ? { neg } : {}) }; };
+  let drag: { tool: Tool; x: number; y: number; neg: boolean; pts: [number, number][]; z0?: number; band?: number; last?: [number, number] } | null = null;
+  const cv = view.canvas;
+  cv.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || toolBar.hidden || S.tool === 'orbit') return;
+    const neg = S.erase || e.ctrlKey || e.metaKey;
+    const hit = view.pick(e.clientX, e.clientY);
+    const rule = ensureRule();
+    const tool = S.tool === 'line' && e.altKey ? 'segment' : S.tool;
+    if (tool === 'line') { if (hit) { rule.rects.push(ring(hit.z, neg)); commitSel(); } return; }
+    if (tool === 'segment') { if (hit) { const d = dab(hit, Math.max(1.5, S.brushR / 2), neg); d.z0 = hit.z - lhNow() / 2; d.z1 = hit.z + lhNow() / 2; rule.rects.push(d); commitSel(); } return; }
+    cv.setPointerCapture(e.pointerId);
+    drag = { tool, x: e.clientX, y: e.clientY, neg, pts: [[e.clientX, e.clientY]] };
+    if (tool === 'brush' && hit) { rule.rects.push(dab(hit, S.brushR, neg)); drag.last = [e.clientX, e.clientY]; paintSoon(); }
+    if (tool === 'band' && hit) { drag.z0 = hit.z; rule.rects.push({ z0: hit.z - lhNow() / 2, z1: hit.z + lhNow() / 2, a0: 0, a1: 1, ...(neg ? { neg } : {}) }); drag.band = rule.rects.length - 1; paintSoon(); }
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const rule = activeRule(); if (!rule) return;
+    if (drag.tool === 'brush') {
+      if (drag.last && Math.hypot(e.clientX - drag.last[0], e.clientY - drag.last[1]) < 5) return;
+      const hit = view.pick(e.clientX, e.clientY); if (!hit) return;
+      rule.rects.push(dab(hit, S.brushR, drag.neg)); drag.last = [e.clientX, e.clientY]; paintSoon();
+    } else if (drag.tool === 'band' && drag.band != null && drag.z0 != null) {
+      const hit = view.pick(e.clientX, e.clientY); if (!hit) return;
+      const r = rule.rects[drag.band]; r.z0 = Math.min(drag.z0, hit.z) - lhNow() / 2; r.z1 = Math.max(drag.z0, hit.z) + lhNow() / 2; paintSoon();
+    } else if (drag.tool === 'box') {
+      const sr = stage.getBoundingClientRect();
+      marquee.hidden = false;
+      Object.assign(marquee.style, { left: `${Math.min(drag.x, e.clientX) - sr.left}px`, top: `${Math.min(drag.y, e.clientY) - sr.top}px`, width: `${Math.abs(e.clientX - drag.x)}px`, height: `${Math.abs(e.clientY - drag.y)}px` });
+      marquee.classList.toggle('neg', drag.neg);
+    } else if (drag.tool === 'lasso') {
+      drag.pts.push([e.clientX, e.clientY]);
+      const sr = stage.getBoundingClientRect();
+      lassoPath.setAttribute('points', drag.pts.map(([x, y]) => `${x - sr.left},${y - sr.top}`).join(' '));
+      lassoSvg.classList.add('on'); lassoSvg.classList.toggle('neg', drag.neg);
+    }
+  });
+  cv.addEventListener('pointerup', (e) => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    const rule = activeRule();
+    if (rule && d.tool === 'box') {
+      marquee.hidden = true;
+      const x0 = Math.min(d.x, e.clientX), x1 = Math.max(d.x, e.clientX), y0 = Math.min(d.y, e.clientY), y1 = Math.max(d.y, e.clientY);
+      if (x1 - x0 > 3 && y1 - y0 > 3) rule.rects.push(...rowsToRects(view.selectScreen((x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1), d.neg));
+    } else if (rule && d.tool === 'lasso') {
+      lassoSvg.classList.remove('on'); lassoPath.setAttribute('points', '');
+      if (d.pts.length > 4) rule.rects.push(...rowsToRects(view.selectScreen((x, y) => inPoly(x, y, d.pts)), d.neg));
+    }
+    commitSel();
+  });
+  function commitSel() { changed(false); paintRules(); renderPanel(); }
+
+  function bodyPanel() {
+    const list = h('div', { class: 'mxs-zones' });
+    S.rules.forEach((r, i) => {
+      const en = toggle(() => r.enabled, (v) => (r.enabled = v), () => { changed(false); paintRules(); });
+      en.onclick = (e) => e.stopPropagation();
+      const b = r.brushId ? brushOf(r.brushId) : null;
+      const what = [b?.name, r.speed != null ? `speed ${r.speed}%` : '', r.flow != null ? `flow ${r.flow}%` : '', r.temp != null ? `${r.temp}°C` : ''].filter(Boolean).join(' · ') || 'nothing to change yet';
+      const up = h('button', { class: 'mxs-linkb', disabled: i === 0 }, 'Up'); up.onclick = (e) => { e.stopPropagation(); [S.rules[i - 1], S.rules[i]] = [S.rules[i], S.rules[i - 1]]; changed(false); renderPanel(); paintRules(); };
+      const dn = h('button', { class: 'mxs-linkb', disabled: i === S.rules.length - 1 }, 'Down'); dn.onclick = (e) => { e.stopPropagation(); [S.rules[i + 1], S.rules[i]] = [S.rules[i], S.rules[i + 1]]; changed(false); renderPanel(); paintRules(); };
+      const del = h('button', { class: 'mxs-linkb' }, 'Delete'); del.onclick = (e) => { e.stopPropagation(); S.rules.splice(i, 1); if (S.activeRule === r.id) S.activeRule = S.rules[0]?.id ?? null; changed(false); renderAll(); paintRules(); };
+      const item = h('div', { class: `mxs-zone mxs-rule${S.activeRule === r.id ? ' on' : ''}`, role: 'button', tabindex: '0', style: `--rc:${r.color}` }, en,
+        h('span', {}, h('b', {}, r.name), h('small', {}, `${r.rects.filter((q) => !q.neg).length ? `${countSel(r)} · ` : 'no selection · '}${what}`), h('span', { class: 'mxs-rbtns' }, up, dn, del)));
+      item.onclick = () => { S.activeRule = r.id; renderStrip(); renderPanel(); paintRules(); renderTools(); };
+      list.append(item);
+    });
+    const add = h('button', { class: 'mxs-btn mxs-sm' }, icon('plus', 13), 'New rule');
+    add.onclick = () => { const r = newRule(S.rules.length + 1); S.rules.push(r); S.activeRule = r.id; if (S.tool === 'orbit') S.tool = 'line'; changed(false); renderAll(); };
+    right.append(group('Rules', S.rules.length ? list : h('p', { class: 'mxs-hint' }, 'Select parts of the piece with the tools above the view, then choose what changes there. Rules lower in the list win where two set the same thing.'), h('div', { class: 'mxs-btnrow' }, add)));
+    const r = activeRule(); if (!r) return;
+    const rc = () => { changed(false); const sm = right.querySelector('.mxs-rule.on small'); if (sm) sm.textContent = 'edited'; };
+    const rp = () => { rc(); paintSoon(); };
+    const name = h('input', { type: 'text', value: r.name, 'aria-label': 'Rule name' }) as HTMLInputElement; name.oninput = () => { r.name = name.value; rc(); };
+    const color = h('input', { type: 'color', value: r.color, 'aria-label': 'Selection colour' }) as HTMLInputElement; color.oninput = () => { r.color = color.value; persist(); paintSoon(); };
+    const clear = h('button', { class: 'mxs-btn mxs-sm' }, 'Clear'); clear.onclick = () => { r.rects = []; changed(false); paintRules(); renderPanel(); };
+    const lineBox = (k: 'outer' | 'inner' | 'base', label: string) => h('label', { class: 'mxs-check' }, toggle(() => r.lines[k], (v) => (r.lines[k] = v), rp), label);
+    right.append(group('Selected rule',
+      row('Name', h('div', { class: 'mxs-inl' }, name, color)),
+      row('Selection', h('div', { class: 'mxs-inl' }, h('span', { class: 'mxs-muted' }, r.rects.length ? countSel(r) : 'nothing selected'), clear)),
+      h('div', { class: 'mxs-sub' }, h('b', {}, 'Reach up and down'),
+        row('Layers above', num(() => r.reachUp, (v) => (r.reachUp = v), 0, 400, 1, 'layers', rp)),
+        row('Layers below', num(() => r.reachDown, (v) => (r.reachDown = v), 0, 400, 1, 'layers', rp))),
+      h('div', { class: 'mxs-sub' }, h('b', {}, 'Lines to change'), h('div', { class: 'mxs-checks' }, lineBox('outer', 'Outer wall'), lineBox('inner', 'Inner walls'), lineBox('base', 'Bottom layers')),
+        row('Wall shape', seg([['all', 'All'], ['curved', 'Curved parts'], ['straight', 'Straight parts']], () => r.wallShape, (v) => { r.wallShape = v; rc(); renderPanel(); })))));
+    const opt = (label: string, get: () => number | null, set: (v: number | null) => void, def: number, min: number, max: number, step: number, unit: string) => {
+      const on = get() != null;
+      const ck = toggle(() => on, (v) => { set(v ? def : null); rc(); renderPanel(); });
+      return h('div', { class: `mxs-row mxs-optrow${on ? '' : ' off'}` }, h('label', {}, ck, label), on ? num(() => get() ?? def, (v) => set(v), min, max, step, unit, rc) : h('span', { class: 'mxs-muted' }, 'keep as sliced'));
+    };
+    const brushSel = select<string>([['', 'None'], ...PRESETS.map((b) => [b.id, `${b.category ?? ''} · ${b.name}`] as [string, string])], () => r.brushId ?? '', (v) => (r.brushId = v || null), () => { rc(); renderStrip(); renderPanel(); });
+    const b = r.brushId ? brushOf(r.brushId) : null;
+    const ch = group('Change there',
+      row('Motion', brushSel),
+      b ? row('Size', num(() => r.size, (v) => (r.size = v), 0, 4, 0.05, '×', rc)) : null,
+      b ? row('Spacing', num(() => r.spacing, (v) => (r.spacing = v), 0.2, 5, 0.05, '×', rc)) : null,
+      b ? row('Phase', num(() => r.phase, (v) => (r.phase = v), 0, 360, 5, '°', rc)) : null,
+      b ? row('Stacking', select<string>([['own', "Motion's own"], ...STACKS.map((p) => [p.id, p.label] as [string, string])], () => (r.useBrushLayers ? 'own' : STACKS.find((p) => JSON.stringify(p.make()) === JSON.stringify(r.layers))?.id ?? 'aligned'), (v) => { if (v === 'own') r.useBrushLayers = true; else { r.useBrushLayers = false; r.layers = STACKS.find((p) => p.id === v)!.make(); } }, rc)) : null,
+      opt('Speed', () => r.speed, (v) => (r.speed = v), 60, 5, 300, 1, '%'),
+      opt('Flow', () => r.flow, (v) => (r.flow = v), 110, 20, 300, 1, '%'),
+      opt('Temperature', () => r.temp, (v) => (r.temp = v), S.slice.nozzleTemp, 150, 320, 1, '°C'),
+      row('Soft edge', num(() => r.soft, (v) => (r.soft = v), 0, 30, 0.5, 'mm', rp)),
+      h('p', { class: 'mxs-hint' }, 'Temperature changes apply per layer (the hotend cannot change within a line). Rules lower in the list win where two set the same.'));
+    right.append(ch);
+  }
+  const countSel = (r: Rule) => { const pos = r.rects.filter((q) => !q.neg), neg = r.rects.length - pos.length; return `${pos.length} patch${pos.length === 1 ? '' : 'es'}${neg ? ` · ${neg} erased` : ''}`; };
+
+  const simBox = h('div', { class: 'mxs-simbox' });
+  function renderSimStats() {
+    simBox.innerHTML = '';
+    if (!sim || !result) return;
+    const st = sim.stats, n = result.segs.length || 1;
+    const pct = (k: number) => (k / n * 100 < 0.1 && k ? '<0.1' : (k / n * 100).toFixed(1));
+    const item = (cls: string, label: string, k: number, mode: ColorBy) => { const b = h('button', { class: `mxs-defect ${cls}`, title: `Show ${label.toLowerCase()} in the view` }, h('i', {}), h('span', {}, label), h('b', {}, k ? `${pct(k)}%` : 'none')); b.onclick = () => { S.colorBy = mode; view.colorBy = mode; view.recolour(); persist(); renderViewBar(); }; return b; };
+    simBox.append(h('div', { class: 'mxs-simh' }, h('b', {}, 'As it will print'), h('small', {}, `real time ${fmtTime(st.seconds)} · width ${(st.minRatio * 100).toFixed(0)}–${(st.maxRatio * 100).toFixed(0)}% · sag up to ${st.maxDroop.toFixed(2)} mm`)),
+      item('blob', 'Blobs / extra', st.blobs, 'defects'), item('thin', 'Thin lines', st.thin, 'defects'), item('starve', 'Hotend can’t keep up', st.starve, 'defects'), item('sag', 'Sagging lines', st.sag, 'sag'));
+  }
   function slicePanel() {
     const s = S.slice, sc = () => changed(false);
     const pname = S.printer ? (S.printer.kind === 'device' ? host?.printers().find((p) => p.id === S.printer!.id)?.name : PRINTERS.find((p) => p.id === S.printer!.id)?.name) ?? '—' : '—';
@@ -479,11 +696,24 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const eg = h('textarea', { rows: '4', spellcheck: 'false', 'aria-label': 'End G-code' }) as HTMLTextAreaElement; eg.value = s.endGcode; eg.oninput = () => { s.endGcode = eg.value; sc(); };
     const adv = h('details', { class: 'mxs-group mxs-adv' }, h('summary', {}, 'Start / end G-code'), h('label', {}, 'Start'), sg, h('label', {}, 'End'), eg);
     right.append(adv);
+    const P = S.physics, pc = () => { persist(); if (result) { sim = simulate(result, S.slice, S.physics); view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); renderSimStats(); } };
+    const phys = h('details', { class: 'mxs-group mxs-adv' }, h('summary', {}, 'Print physics (preview)'),
+      h('p', { class: 'mxs-hint' }, 'Used to show the print as it will come out: blobs where the nozzle slows, thin lines where it rushes or the hotend runs out of melt, sag on overhangs, seams. Set from your printer; tune after a test print.'),
+      row('Acceleration', num(() => P.accel, (v) => (P.accel = v), 500, 30000, 100, 'mm/s²', pc)),
+      row('Corner speed', num(() => P.scv, (v) => (P.scv = v), 1, 20, 0.5, 'mm/s', pc), 'Square corner velocity / junction speed.'),
+      row('Pressure lag', num(() => P.lag * 1000, (v) => (P.lag = v / 1000), 0, 120, 1, 'ms', pc), '0 = perfect pressure advance.'),
+      row('Hotend melt', num(() => P.hotendFlow, (v) => (P.hotendFlow = v), 2, 60, 0.5, 'mm³/s', pc)),
+      row('Sag', num(() => P.sag, (v) => (P.sag = v), 0, 3, 0.05, '×', pc), 'Higher for hot or slow-cooling filament.'),
+      row('Ooze at restarts', num(() => P.ooze, (v) => (P.ooze = v), 0, 2, 0.05, 'mm³', pc)),
+      (() => { const b = h('button', { class: 'mxs-btn mxs-sm' }, 'Reset to printer'); b.onclick = () => { S.physics = physicsFor(S.slice.printer); pc(); renderPanel(); }; return b; })());
+    right.append(phys);
     // output
     const outG = group('Output', sliceB);
     if (result) {
       const r = result.stats;
       outG.append(h('div', { class: 'mxs-metrics' }, ...([['Layers', String(result.layers)], ['Time', fmtTime(r.seconds)], ['Filament', `${(r.filamentMm / 1000).toFixed(1)} m · ${r.grams.toFixed(0)} g`], ['Motion', `${r.maxOffset.toFixed(2)} mm`]] as [string, string][]).map(([k, v]) => h('span', {}, h('small', {}, k), h('b', {}, v)))));
+      outG.append(simBox);
+      renderSimStats();
       if (result.warnings.length) outG.append(h('div', { class: 'mxs-warn' }, ...result.warnings.map((w) => h('div', {}, w))));
       if (stale) outG.append(h('p', { class: 'mxs-hint mxs-amber' }, 'You changed the piece since this slice. Slice again before printing.'));
       const dl = h('button', { class: 'mxs-btn mxs-wide' }, icon('export'), canDownload ? 'Download G-code' : 'Copy G-code');
@@ -515,10 +745,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     if (S.rail === 'library') {
       const lib = lsArr<Saved>(LIB);
       const grid = h('div', { class: 'mxs-cards' });
-      for (const f of FAMILIES) { const b = h('button', { class: 'mxs-card mxs-new' }, icon(f.id, 26), h('b', {}, `New ${f.name.toLowerCase()}`)); b.onclick = () => { S.design = defaultDesign(f.id); S.zones = []; S.rail = 'studio'; S.step = 'design'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); }; grid.append(b); }
+      for (const f of FAMILIES) { const b = h('button', { class: 'mxs-card mxs-new' }, icon(f.id, 26), h('b', {}, `New ${f.name.toLowerCase()}`)); b.onclick = () => { S.design = defaultDesign(f.id); S.zones = []; S.rules = []; S.rail = 'studio'; S.step = 'design'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); }; grid.append(b); }
       for (const p of lib) {
         const c = h('canvas', { width: '120', height: '90' }) as HTMLCanvasElement; drawOutline(c, p.design.profile);
-        const open = h('button', { class: 'mxs-btn mxs-sm' }, 'Open'); open.onclick = () => { S.design = structuredClone(p.design); S.zones = structuredClone(p.zones); S.activeZone = S.zones[0]?.id ?? null; S.rail = 'studio'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); };
+        const open = h('button', { class: 'mxs-btn mxs-sm' }, 'Open'); open.onclick = () => { S.design = structuredClone(p.design); S.zones = structuredClone(p.zones); S.rules = structuredClone(p.rules ?? []); S.activeRule = S.rules[0]?.id ?? null; S.activeZone = S.zones[0]?.id ?? null; S.rail = 'studio'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); };
         const del = h('button', { class: 'mxs-btn mxs-sm' }, 'Delete'); del.onclick = () => { ls.set(LIB, lsArr<Saved>(LIB).filter((x) => x.id !== p.id)); renderPage(); };
         grid.append(h('div', { class: 'mxs-card' }, c, h('b', {}, p.name), h('small', {}, `${p.design.family} · ${new Date(p.at).toLocaleDateString()}`), h('div', { class: 'mxs-btnrow' }, open, del)));
       }
@@ -573,9 +803,27 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       tog('Model', showModel, () => { showModel = !showModel; if (!showModel && !showToolpath) showToolpath = !!result; view.setVisibility(showModel, showToolpath); renderViewBar(); }),
       tog('Toolpath', showToolpath, () => { showToolpath = !showToolpath; if (!showModel && !showToolpath) showModel = true; view.setVisibility(showModel, showToolpath); renderViewBar(); renderLayerBar(); }, !result));
     if (result && showToolpath) {
-      const cb = select<ColorBy>([['feature', 'Colour: feature'], ['speed', 'Colour: speed'], ['height', 'Colour: height'], ['flow', 'Colour: flow']], () => view.colorBy, (v) => { view.colorBy = v; view.recolour([S.slice.bedX, S.slice.bedY]); });
+      const st = seg<PathStyle>([['lines', 'Lines'], ['ribbons', 'Beads'], ['tubes', 'Tubes']], () => S.pathStyle, (v) => { S.pathStyle = v; persist(); view.setStyle(v); renderViewBar(); });
+      st.classList.add('mxs-vseg'); st.title = 'Lines: fastest · Beads: real width and height of every line · Tubes: round beads for close-up (last 40 layers)';
+      const cb = select<ColorBy>([['feature', 'Colour: line kind'], ['width', 'Colour: real width'], ['flow', 'Colour: material vs plan'], ['speed', 'Colour: real speed'], ['sag', 'Colour: sag'], ['defects', 'Colour: defects'], ['rules', 'Colour: rules'], ['height', 'Colour: height']], () => S.colorBy, (v) => { S.colorBy = v; view.colorBy = v; persist(); view.recolour(); renderViewBar(); });
       cb.className = 'mxs-vsel';
-      viewBar.append(cb);
+      viewBar.append(st, cb);
+      const legend: Partial<Record<ColorBy, [string, string][]>> = {
+        width: [['#2f80ed', 'thinner'], ['#cdd0d6', 'as planned'], ['#e5383b', 'wider']], flow: [['#2f80ed', 'less'], ['#cdd0d6', 'as planned'], ['#e5383b', 'more']],
+        defects: [['#e5383b', 'blob'], ['#2f80ed', 'thin'], ['#7a3cff', 'hotend limit'], ['#f2a31b', 'sag']], sag: [['#cdd0d6', 'supported'], ['#f2a31b', 'droops']],
+      };
+      const lg = legend[S.colorBy];
+      if (lg) viewBar.append(h('span', { class: 'mxs-legend' }, ...lg.map(([c, t]) => h('span', {}, h('i', { style: `background:${c}` }), t))));
+      if (S.colorBy === 'feature') {
+        const pk = (k: keyof typeof view.pathColors, label: string) => { const i = h('input', { type: 'color', value: view.pathColors[k], title: `${label} colour`, 'aria-label': `${label} colour` }) as HTMLInputElement; i.onchange = () => { view.pathColors[k] = i.value; view.recolour(); }; return h('label', { class: 'mxs-pk' }, i, label); };
+        viewBar.append(h('span', { class: 'mxs-legend' }, pk('wall', 'Wall'), pk('motion', 'Motion'), pk('inner', 'Inner'), pk('base', 'Base')));
+      }
+    }
+    if (showModel) {
+      const sw = h('span', { class: 'mxs-vsw', title: 'Model colour' });
+      for (const col of ['#ece6dc', '#f7f7f4', '#d8b48a', '#c96f4a', '#8aa58f', '#6b7fa8', '#2e3138']) { const b = h('button', { class: `mxs-sw${S.color === col ? ' on' : ''}`, style: `background:${col}`, 'aria-label': `Model colour ${col}` }); b.onclick = () => { S.color = col; persist(); view.setDesign(S.design, S.color); paintRules(); renderViewBar(); }; sw.append(b); }
+      const cu = h('input', { type: 'color', value: S.color, 'aria-label': 'Custom model colour' }) as HTMLInputElement; cu.oninput = () => { S.color = cu.value; persist(); view.setDesign(S.design, S.color); paintRules(); };
+      sw.append(cu); viewBar.append(sw);
     }
     staleTag.hidden = !(result && stale);
     staleTag.textContent = 'Toolpath is out of date: slice again';
@@ -598,6 +846,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const onStudio = S.rail === 'studio';
     stage.hidden = !onStudio; right.hidden = !onStudio; strip.hidden = !onStudio; page.hidden = onStudio;
     body.classList.toggle('mxs-paged', !onStudio);
+    renderTools(); paintRules();
     if (onStudio) { renderPanel(); renderEstimate(); renderViewBar(); (stage.querySelector('.mxs-crumb') as HTMLElement).textContent = `Motionex · ${S.step === 'design' ? 'Design' : S.step === 'motion' ? 'Motion' : 'Slice'} · ${FAMILIES.find((f) => f.id === S.design.family)?.name}`; }
     else renderPage();
   }
@@ -643,7 +892,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       D().profile.forEach((p, i) => { const [px, py] = toPx(p); const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } });
       if (best >= 0) { sel = best; drag = true; c.setPointerCapture(e.pointerId); draw(); }
     };
-    c.onpointermove = (e) => { if (!drag) return; const [x, y] = pos(e); const np = fromPx(x, y); const pts = D().profile; const p = pts[sel]; const sorted = [...pts].sort((a, b) => a.t - b.t); const isEnd = p === sorted[0] || p === sorted[sorted.length - 1]; p.r = np.r; if (!isEnd || pts.length < 2) p.t = np.t; draw(); clearTimeout(meshTimer); meshTimer = window.setTimeout(() => { view.setDesign(S.design, S.color); renderEstimate(); }, 40); };
+    c.onpointermove = (e) => { if (!drag) return; const [x, y] = pos(e); const np = fromPx(x, y); const pts = D().profile; const p = pts[sel]; const sorted = [...pts].sort((a, b) => a.t - b.t); const isEnd = p === sorted[0] || p === sorted[sorted.length - 1]; p.r = np.r; if (!isEnd || pts.length < 2) p.t = np.t; draw(); liveMesh(); clearTimeout(meshTimer); meshTimer = window.setTimeout(renderEstimate, 60); };
     c.onpointerup = () => { if (drag) { drag = false; changed(true); } };
     c.ondblclick = (e) => { const [x, y] = pos(e as unknown as PointerEvent); const np = fromPx(x, y); D().profile.push(np); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(np); dChange(); draw(); };
     rIn.onchange = () => { const p = D().profile[sel]; if (p) { p.r = Math.max(0.02, +rIn.value / 2 / maxR()); dChange(); draw(); } };
@@ -662,6 +911,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
 }
 
 // ───────── helpers
+function hexRgb(hex: string): [number, number, number] { const n = parseInt(hex.slice(1), 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; }
+function inPoly(x: number, y: number, pts: [number, number][]) { let inside = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const [xi, yi] = pts[i], [xj, yj] = pts[j]; if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside; } return inside; }
 function addKids(el: HTMLElement, ...kids: (Node | string | null | false)[]) { for (const k of kids) if (k !== null && k !== false) el.append(k); }
 function slug(s: string) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'motionex'; }
 function download(name: string, blob: Blob) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }

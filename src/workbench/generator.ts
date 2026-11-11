@@ -4,6 +4,7 @@ import { evalCurve } from '../plugins/motionex/curve';
 import { effectPhase } from '../plugins/motionex/modifier';
 import type { LayerEffect, MotionBrush } from '../plugins/motionex/model';
 import { makeSurface, profileR, type Design } from './design';
+import { prepareRules, ruleWeight, type PreparedRule, type Rule } from './rules';
 
 /** One band of layers with its own motion (motion "layer-wise"). Zones are checked top of list first. */
 export interface MotionZone {
@@ -57,7 +58,8 @@ export function newZone(brushId: string, from = 0, to = 1): MotionZone {
   return { id: Math.random().toString(36).slice(2, 9), enabled: true, brushId, from, to, size: 1, spacing: 1, phase: 0, layers: null, useBrushLayers: true, fade: 1 };
 }
 
-export interface Seg { x0: number; y0: number; z0: number; x: number; y: number; z: number; kind: 'wall' | 'motion' | 'base' | 'travel'; speed: number; flow: number }
+/** One move. h/w: nominal bead height and width (w includes flow), e: filament mm, ret: travel with retraction, layer: layer index. */
+export interface Seg { x0: number; y0: number; z0: number; x: number; y: number; z: number; kind: 'wall' | 'motion' | 'base' | 'inner' | 'travel'; speed: number; flow: number; h: number; w: number; e: number; ret: boolean; layer: number; ruled: boolean }
 export interface GenResult {
   gcode: string; segs: Seg[]; layers: number; layerStart: number[]; layerZ: number[];
   stats: { lengthMm: number; filamentMm: number; grams: number; seconds: number; lines: number; maxOffset: number };
@@ -78,14 +80,14 @@ function inset(pts: [number, number][], d: number): [number, number][] {
   return pts.map(([x, y]) => { const r = Math.hypot(x, y) || 1; const k = Math.max(0, (r - d) / r); return [x * k, y * k]; });
 }
 
-export function slice(design: Design, s: SliceSettings, zones: MotionZone[], brushes: (id: string) => MotionBrush | undefined): GenResult {
+export function slice(design: Design, s: SliceSettings, zones: MotionZone[], brushes: (id: string) => MotionBrush | undefined, rules: Rule[] = []): GenResult {
   const out: string[] = [], segs: Seg[] = [], layerStart: number[] = [], layerZ: number[] = [], warnings: string[] = [];
   const surfRaw = makeSurface(design);
   const H = design.height;
   const surf = s.flip ? (z: number, th: number) => surfRaw(H - z, th) : surfRaw;
   const cx = s.bedX / 2, cy = s.bedY / 2;
   const fa = Math.PI * (s.filamentDia / 2) ** 2;
-  let x = cx, y = cy, z = 0, eTot = 0, len = 0, secs = 0, maxOff = 0;
+  let x = cx, y = cy, z = 0, eTot = 0, len = 0, secs = 0, maxOff = 0, curLayer = 0, curRuled = false;
   const emit = (l: string) => out.push(l);
   const volCap = (h: number, w: number) => s.maxVolumetric / (h * w);
 
@@ -96,7 +98,7 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     if (r) emit(`G1 E-${f3(s.retract)} F2400`);
     emit(`G0 X${f3(nx)} Y${f3(ny)}${nz !== z ? ` Z${f3(nz)}` : ''} F${Math.round(s.travelSpeed * 60)}`);
     if (r) emit(`G1 E${f3(s.retract)} F2400`);
-    segs.push({ x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind: 'travel', speed: s.travelSpeed, flow: 0 });
+    segs.push({ x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind: 'travel', speed: s.travelSpeed, flow: 0, h: 0, w: 0, e: 0, ret: r, layer: curLayer, ruled: false });
     secs += d / s.travelSpeed; x = nx; y = ny; z = nz;
   };
   const extrude = (nx: number, ny: number, nz: number, h: number, w: number, speed: number, flow: number, kind: Seg['kind']) => {
@@ -106,15 +108,15 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     const e = (d * h * w * flow * s.flowRatio) / fa;
     eTot += e; len += d; secs += d / sp;
     emit(`G1 X${f3(nx)} Y${f3(ny)}${Math.abs(nz - z) > 1e-6 ? ` Z${f3(nz)}` : ''} E${f5(e)} F${Math.round(sp * 60)}`);
-    segs.push({ x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind, speed: sp, flow });
+    segs.push({ x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind, speed: sp, flow, h, w: w * flow * s.flowRatio, e, ret: false, layer: curLayer, ruled: curRuled });
     x = nx; y = ny; z = nz;
   };
 
   const lh = Math.max(0.05, s.layerHeight), flh = Math.max(0.05, s.firstLayerHeight);
   const nLayers = Math.max(1, 1 + Math.ceil((H - flh) / lh - 1e-6));
   const active = zones.filter((zn) => zn.enabled && brushes(zn.brushId));
-  const minPeriod = Math.min(4, ...active.map((zn) => brushes(zn.brushId)!.period_mm * zn.spacing));
-  const res = active.length ? Math.min(0.6, Math.max(0.15, minPeriod / 20)) : 0.6;
+  const minPeriod = Math.min(4, ...active.map((zn) => brushes(zn.brushId)!.period_mm * zn.spacing), ...rules.filter((r) => r.enabled && r.brushId && brushes(r.brushId)).map((r) => brushes(r.brushId!)!.period_mm * r.spacing));
+  const res = minPeriod < 4 || active.length ? Math.min(0.6, Math.max(0.15, minPeriod / 20)) : 0.6;
 
   // piece must fit
   let maxR = 0; for (let i = 0; i <= 20; i++) for (let j = 0; j < 72; j++) maxR = Math.max(maxR, surf((i / 20) * H, (j / 72) * TAU));
@@ -131,12 +133,35 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
   travel(10, 10, flh); extrude(10, Math.min(s.bedY - 10, 110), flh, flh, s.lineWidth * 1.5, s.firstLayerSpeed, 1, 'base');
   travel(10.6, Math.min(s.bedY - 10, 110)); extrude(10.6, 10, flh, flh, s.lineWidth * 1.5, s.firstLayerSpeed, 1, 'base');
 
+  let curTemp = s.nozzleTemp;
   const baseOn = !design.openBottom && !s.flip ? s.baseLayers : design.openBottom ? 0 : s.baseLayers;
   for (let li = 0; li < nLayers; li++) {
     const zTop = li === 0 ? flh : Math.min(H, flh + li * lh);
     const h = li === 0 ? flh : lh;
     const speed = li === 0 ? s.firstLayerSpeed : s.speed;
-    layerStart.push(segs.length); layerZ.push(zTop);
+    layerStart.push(segs.length); layerZ.push(zTop); curLayer = li;
+    const zd = s.flip ? H - zTop : zTop;
+    const prep = prepareRules(rules, zd, lh);
+    const kindOk = (p: PreparedRule, k: 'outer' | 'inner' | 'base') => p.rule.lines[k];
+    /** Rule effect at a point: speed / flow multipliers, the strongest motion rule and its weight. */
+    const ruleAt = (k: 'outer' | 'inner' | 'base', a: number, r: number, curved: boolean) => {
+      let sp = 1, fl = 1, mw = 0, mr: Rule | null = null, any = false;
+      for (const p of prep) {
+        if (!kindOk(p, k)) continue;
+        if (p.rule.wallShape !== 'all' && (p.rule.wallShape === 'curved') !== curved) continue;
+        const w = ruleWeight(p, zd, a, r); if (w <= 0) continue;
+        any = true;
+        if (p.rule.speed != null) sp = sp * (1 - w) + (p.rule.speed / 100) * w;
+        if (p.rule.flow != null) fl = fl * (1 - w) + (p.rule.flow / 100) * w;
+        if (p.rule.brushId && k === 'outer') { mr = p.rule; mw = w; }
+      }
+      return { sp, fl, mr, mw, any };
+    };
+    {
+      let t = s.nozzleTemp;
+      for (const p of prep) if (p.rule.temp != null && p.pos.some((q) => zd >= q.z0 - p.lo && zd <= q.z1 + p.hi)) t = p.rule.temp;
+      if (t !== curTemp) { emit(`M104 S${Math.round(t)}`); curTemp = t; }
+    }
     emit(';LAYER_CHANGE'); emit(`;LAYER:${li}`); emit(`;Z:${f3(zTop)}`); emit(`M73 P${Math.round((li / nLayers) * 100)}`);
     if (li === 1) emit(`M106 S${Math.round((s.fan / 100) * 255)}`);
     const isBase = li < baseOn;
@@ -151,7 +176,14 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
       if (isBase) { let r0 = 0; for (const [px, py] of plain) r0 = Math.max(r0, Math.hypot(px, py)); for (let k = s.innerWalls + 1; k * s.lineWidth < r0 - s.lineWidth / 2; k++) rings.push(inset(plain, k * s.lineWidth)); }
       rings.forEach((ring, ri) => {
         travel(cx + ring[0][0], cy + ring[0][1], zTop);
-        for (let i = 1; i <= ring.length; i++) { const p = ring[i % ring.length]; extrude(cx + p[0], cy + p[1], zTop, h, s.lineWidth, speed, 1, isBase && ri >= s.innerWalls ? 'base' : 'wall'); }
+        const k = isBase && ri >= s.innerWalls ? 'base' : 'inner';
+        for (let i = 1; i <= ring.length; i++) {
+          const p = ring[i % ring.length];
+          let sp = 1, fl = 1;
+          if (prep.length) { const q = ruleAt(k, frac(Math.atan2(p[1], p[0]) / TAU), Math.hypot(p[0], p[1]), true); sp = q.sp; fl = q.fl; curRuled = q.any; }
+          extrude(cx + p[0], cy + p[1], zTop, h, s.lineWidth, speed * sp, fl, k);
+        }
+        curRuled = false;
       });
     }
 
@@ -196,10 +228,39 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
         ox = nx * lat + tx * al; oy = ny * lat + ty * al;
         maxOff = Math.max(maxOff, Math.hypot(lat, al));
       }
+      let moving = !!brush && fade > 0;
+      curRuled = false;
+      if (prep.length && li >= Math.max(1, baseOn)) {
+        // turn angle per mm on the plain loop: curved vs straight wall
+        const ax = p[0] - pp[0], ay = p[1] - pp[1], bx = pn[0] - p[0], by = pn[1] - p[1];
+        const turn = Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by)) / Math.max(1e-6, (Math.hypot(ax, ay) + Math.hypot(bx, by)) / 2);
+        const q = ruleAt('outer', frac(Math.atan2(p[1], p[0]) / TAU), Math.hypot(p[0], p[1]), turn > 1 / 150);
+        curRuled = q.any;
+        sp *= q.sp; flow *= q.fl;
+        if (q.mr && q.mw > 0) {
+          const rb = brushes(q.mr.brushId!);
+          if (rb) {
+            const rp = Math.max(0.2, rb.period_mm * q.mr.spacing);
+            const eff = q.mr.useBrushLayers ? rb.layers ?? null : q.mr.layers;
+            const lp = effectPhase(eff, li);
+            if (lp !== null) {
+              const u = frac(acc / rp + ((rb.phase_deg ?? 0) + q.mr.phase + (eff?.cross && li % 2 ? -lp : lp)) / 360);
+              const ra = rb.amplitude * q.mr.size, w = q.mw;
+              const lat = evalCurve(rb.curves.lateral_offset, u) * ra, al = evalCurve(rb.curves.along_offset, u) * ra;
+              ox = ox * (1 - w) + (nx * lat + tx * al) * w; oy = oy * (1 - w) + (ny * lat + ty * al) * w;
+              oz = oz * (1 - w) + evalCurve(rb.curves.z_offset, u) * (rb.z_amplitude ?? 0) * q.mr.size * w;
+              flow = flow * (1 - w) + Math.min(rb.limits.max_flow_mult, Math.max(rb.limits.min_flow_mult, evalCurve(rb.curves.extrusion_mult, u))) * q.fl * w;
+              sp = sp * (1 - w) + Math.max(0.1, evalCurve(rb.curves.speed_mult, u)) * q.sp * w;
+              maxOff = Math.max(maxOff, Math.hypot(lat, al) * w);
+              moving = true;
+            }
+          }
+        }
+      }
       const zz = spiralNow ? zTop - h + h * (acc / L) : zTop;
       const px = cx + p[0] + ox, py = cy + p[1] + oy, pz = Math.max(0.05, zz + oz);
       if (i === 0) { travel(px, py, spiralNow ? z : zTop); continue; }
-      extrude(px, py, pz, h, s.lineWidth, speed * sp, flow, brush && fade > 0 ? 'motion' : 'wall');
+      extrude(px, py, pz, h, s.lineWidth, speed * sp, flow, moving ? 'motion' : 'wall');
     }
   }
   emit(`; filament used: ${(eTot / 1000).toFixed(3)} m`);
