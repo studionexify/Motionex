@@ -317,3 +317,20 @@ details.mxs-group:not(.mxs-adv):not([open]) { background: var(--mxs-soft); }
 .mxs-est-pill .mxs-ic { color: var(--mxs-muted); }
 .mxs-est.open { width: 210px; background: var(--mxs-panel); border: 1px solid var(--mxs-line); border-radius: 10px; padding: 8px 11px 10px; box-shadow: var(--mxs-shadow); }
 .mxs-est.open .mxs-est-pill { border: 0; box-shadow: none; padding: 0; margin-bottom: 4px; background: none; }
+
+/* ── UI scale: every panel and overlay zooms; the 3D canvas keeps native resolution */
+.mxs { --mxs-ui: 1; grid-template-rows: calc(46px * var(--mxs-ui)) minmax(0, 1fr); }
+.mxs-body { grid-template-columns: calc(64px * var(--mxs-ui)) auto minmax(0, 1fr) calc(320px * var(--mxs-ui)); }
+.mxs-body.mxs-paged { grid-template-columns: calc(64px * var(--mxs-ui)) minmax(0, 1fr); }
+.mxs-top, .mxs-rail, .mxs-strip, .mxs-panel, .mxs-page, .mxs-tools, .mxs-bottom, .mxs-est, .mxs-crumb, .mxs-stale, .mxs-fit, .mxs-gcard { zoom: var(--mxs-ui); }
+
+/* settings + slice button */
+.mxs-brand { align-items: center; }
+.mxs-brand .mxs-popwrap { margin-left: 6px; }
+.mxs-settings { top: 34px; bottom: auto; left: 0; right: auto; width: 290px; z-index: 30; }
+.mxs-scale { grid-template-columns: minmax(0, 1fr) 58px 16px; }
+.mxs-settings .mxs-btnrow { flex-wrap: wrap; }
+.mxs-slicebtn { font-weight: 600; }
+.mxs-slicebtn.on { background: var(--mxs-accent); color: var(--mxs-accent-text); border-color: var(--mxs-accent); }
+.mxs-slicebtn.mxs-stale-dot { position: relative; }
+.mxs-slicebtn.mxs-stale-dot::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--mxs-warn); }

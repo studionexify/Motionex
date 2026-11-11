@@ -50,6 +50,7 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, 
   return el;
 }
 const ICON: Record<string, string> = {
+  gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   undo: 'M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', redo: 'm15 14 5-5-5-5M20 9H10a6 6 0 0 0 0 12h3', save: 'M5 3h11l3 3v15H5zM8 3v5h7M8 21v-7h8v7',
   spark: 'M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6', moon: 'M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z',
   export: 'M12 3v12M7 8l5-5 5 5M5 14v6h14v-6', printer: 'M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z', studio: 'M12 2 3 7v10l9 5 9-5V7zM3 7l9 5 9-5M12 12v10',
@@ -115,11 +116,34 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const printerSel = h('select', { class: 'mxs-printer', id: 'mxs-printer', 'aria-label': 'Printer' }) as HTMLSelectElement;
   const printerBox = h('label', { class: 'mxs-printer-box', for: 'mxs-printer' }, icon('printer'), printerSel);
   const steps = h('div', { class: 'mxs-steps', role: 'tablist' });
+  const sliceTopB = h('button', { class: 'mxs-btn mxs-slicebtn', title: 'Slice and preview the print' }, icon('slice'), 'Slice');
+  sliceTopB.onclick = () => { const need = !result || stale; S.step = 'slice'; S.rail = 'studio'; renderAll(); if (need) doSlice(); };
+  // UI scale (20–250 %), from the settings button at the top left
+  const SCALE_KEY = 'motionex.uiScale';
+  let uiScale = (() => { try { return Math.min(2.5, Math.max(0.2, +(localStorage.getItem(SCALE_KEY) ?? 1) || 1)); } catch { return 1; } })();
+  const applyScale = () => { root.style.setProperty('--mxs-ui', String(uiScale)); try { localStorage.setItem(SCALE_KEY, String(uiScale)); } catch { /* blocked */ } };
+  const settingsB = h('button', { class: 'mxs-ib', title: 'Settings', 'aria-label': 'Settings' }, icon('gear'));
+  const settingsPop = h('div', { class: 'mxs-pop mxs-settings', hidden: true });
+  const renderSettings = () => {
+    settingsPop.innerHTML = '';
+    const pct = Math.round(uiScale * 100);
+    const r = h('input', { type: 'range', min: '20', max: '250', step: '5', value: String(pct), 'aria-label': 'Interface scale' }) as HTMLInputElement;
+    const n = h('input', { type: 'number', min: '20', max: '250', step: '5', value: String(pct), 'aria-label': 'Interface scale percent' }) as HTMLInputElement;
+    const set = (v: number) => { uiScale = Math.min(250, Math.max(20, Math.round(v))) / 100; r.value = n.value = String(Math.round(uiScale * 100)); applyScale(); };
+    r.oninput = () => set(+r.value); n.onchange = () => set(+n.value);
+    const presets = h('div', { class: 'mxs-btnrow' }, ...[50, 75, 100, 125, 150, 200].map((v) => { const b = h('button', { class: `mxs-btn mxs-sm${pct === v ? ' on' : ''}` }, `${v}%`); b.onclick = () => { set(v); renderSettings(); }; return b; }));
+    settingsPop.append(h('div', { class: 'mxs-pop-h' }, 'Interface scale'), h('div', { class: 'mxs-num mxs-scale' }, r, n, h('span', { class: 'mxs-unit' }, '%')), presets,
+      h('small', { class: 'mxs-muted' }, 'Scales every panel, button and text. 100% suits a 2560×1440 screen at 100% system scaling.'));
+  };
+  settingsB.onclick = (e) => { e.stopPropagation(); settingsPop.hidden = !settingsPop.hidden; if (!settingsPop.hidden) renderSettings(); };
+  const closeSettings = (e: MouseEvent) => { if (!settingsPop.hidden && !settingsPop.contains(e.target as Node) && e.target !== settingsB) settingsPop.hidden = true; };
+  document.addEventListener('mousedown', closeSettings);
+  applyScale();
   const top = h('header', { class: 'mxs-top' },
-    h('div', { class: 'mxs-brand' }, h('b', {}, 'Motionex'), h('small', {}, 'Studio')),
+    h('div', { class: 'mxs-brand' }, h('b', {}, 'Motionex'), h('small', {}, 'Studio'), h('span', { class: 'mxs-popwrap' }, settingsB, settingsPop)),
     h('div', { class: 'mxs-tgroup' }, undoB, redoB, nameIn, saveB),
     steps,
-    h('div', { class: 'mxs-tgroup mxs-right' }, printerBox, surpriseB, exportB, themeB));
+    h('div', { class: 'mxs-tgroup mxs-right' }, printerBox, sliceTopB, surpriseB, exportB, themeB));
 
   // ───────── rail + strip + centre + right
   const rail = h('nav', { class: 'mxs-rail' });
@@ -273,11 +297,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   function updateTop() {
     undoB.disabled = !past.length; redoB.disabled = !future.length;
     if (document.activeElement !== nameIn) nameIn.value = S.design.name;
-    if (!steps.childElementCount) for (const [id, label, ic] of [['design', 'Design', 'design'], ['motion', 'Motion', 'motion'], ['slice', 'Slice', 'slice']] as const) {
+    if (!steps.childElementCount) for (const [id, label, ic] of [['design', 'Design', 'design'], ['motion', 'Motion', 'motion']] as const) {
       const b = h('button', { role: 'tab', class: 'mxs-step', 'data-step': id }, icon(ic, 16), h('span', {}, label), h('i', { class: 'mxs-dot', title: 'Changed since last slice', hidden: true }));
       b.onclick = () => { S.step = id; S.rail = 'studio'; renderAll(); };
       steps.append(b);
     }
+    sliceTopB.classList.toggle('on', S.step === 'slice');
+    sliceTopB.classList.toggle('mxs-stale-dot', !!(result && stale));
     for (const b of steps.querySelectorAll<HTMLButtonElement>('.mxs-step')) {
       const on = b.dataset.step === S.step; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on));
       (b.querySelector('.mxs-dot') as HTMLElement).hidden = !(b.dataset.step === 'slice' && result && stale);
@@ -1102,7 +1128,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   view.setTheme(root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches));
   view.setDesign(S.design, S.color);
   renderAll();
-  return () => { offHost(); window.removeEventListener('keydown', onKey); view.dispose(); root.innerHTML = ''; root.classList.remove('mxs'); };
+  return () => { document.removeEventListener('mousedown', closeSettings); offHost(); window.removeEventListener('keydown', onKey); view.dispose(); root.innerHTML = ''; root.classList.remove('mxs'); };
 }
 
 // ───────── helpers
