@@ -81,7 +81,12 @@ export class StudioView {
   private highlight: ((z: number, a: number, r: number) => [number, number, number] | null) | null = null;
   private ruledMask: Uint8Array | null = null;
   showModel = true; showToolpath = false; maxLayer = Infinity; colorBy: ColorBy = 'feature'; style: PathStyle = 'ribbons'; tubeWindow = 40; flip = false;
-  pathColors = { wall: '#d8c46c', motion: '#ff7a2f', base: '#46b98e', inner: '#9aa4b2' };
+  pathColors = { wall: '#d8c46c', motion: '#ff7a2f', base: '#46b98e', inner: '#9aa4b2', top: '#4fa3d9' };
+  /** Line kinds drawn and pickable (NexSpiro "Show lines"). */
+  visible = { outer: true, inner: true, base: true, top: true };
+  /** Rule colours by rule index, for the 'rules' colour mode. */
+  ruleColors: string[] = [];
+  private kindVisible(k: string) { return k === 'wall' || k === 'motion' ? this.visible.outer : k === 'inner' ? this.visible.inner : k === 'base' ? this.visible.base : k === 'top' ? this.visible.top : true; }
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
@@ -275,7 +280,7 @@ export class StudioView {
     const r = this.result!, s = r.segs[i], sim = this.sim;
     switch (this.colorBy) {
       case 'feature': c.set(this.pathColors[s.kind === 'travel' ? 'inner' : s.kind]); return;
-      case 'rules': c.set(s.ruled ? '#e8467c' : '#c9ccd2'); return;
+      case 'rules': if (s.rule >= 0 && this.ruleColors[s.rule]) c.set(this.ruleColors[s.rule]); else { c.set(this.pathColors[s.kind === 'travel' ? 'inner' : s.kind]); c.lerp(new THREE.Color('#c9ccd2'), 0.75); } return;
       case 'speed': ramp((sim ? sim.speed[i] : s.speed) / ranges.sp, c); return;
       case 'height': ramp(s.z / ranges.z, c); return;
       case 'width': case 'flow': {
@@ -305,7 +310,7 @@ export class StudioView {
     if (this.style === 'lines' || !sim) {
       const n = res.segs.length, pos = new Float32Array(n * 6), col = new Float32Array(n * 6);
       res.segs.forEach((s, i) => {
-        if (s.kind === 'travel') pos.set([s.x - cx, s.y - cy, fz(s.z), s.x - cx, s.y - cy, fz(s.z)], i * 6);
+        if (s.kind === 'travel' || !this.kindVisible(s.kind)) pos.set([s.x - cx, s.y - cy, fz(s.z), s.x - cx, s.y - cy, fz(s.z)], i * 6);
         else { const dr = sim ? sim.droop[i] : 0; pos.set([s.x0 - cx, s.y0 - cy, fz(s.z0 - dr), s.x - cx, s.y - cy, fz(s.z - dr)], i * 6); }
         this.segColor(i, c, ranges);
         col.set([c.r, c.g, c.b, c.r, c.g, c.b], i * 6);
@@ -324,6 +329,7 @@ export class StudioView {
       for (let i = 0; i < res.segs.length; i++) {
         while (layer < res.layers && res.layerStart[layer] <= i) lstart[layer++] = k;
         const s = res.segs[i]; if (s.kind === 'travel') continue;
+        if (!this.kindVisible(s.kind)) { WH[k * 2] = 0; WH[k * 2 + 1] = 0; index[k++] = i; continue; }
         const dr = sim.droop[i];
         A.set([s.x0 - cx, s.y0 - cy, fz(s.z0 - dr)], k * 3); B.set([s.x - cx, s.y - cy, fz(s.z - dr)], k * 3);
         WH[k * 2] = sim.width[i]; WH[k * 2 + 1] = sim.height[i] * (this.flip ? -1 : 1);
@@ -357,6 +363,36 @@ export class StudioView {
     }
     this.draw();
   }
+  setKindsVisible(v: Partial<StudioView['visible']>) { Object.assign(this.visible, v); this.rebuildPath(); }
+
+  /** Visible extrusion segments within the layer cut, projected to the screen. */
+  private projected(): { i: number; sx: number; sy: number; depth: number }[] {
+    const r = this.result; if (!r || !this.showToolpath) return [];
+    const rect = this.canvas.getBoundingClientRect();
+    const m = new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    const v = new THREE.Vector3(), cx = this.bed[0] / 2, cy = this.bed[1] / 2, H = this.height;
+    const top = Math.min(this.maxLayer, r.layers - 1), end = top >= r.layers - 1 ? r.segs.length : r.layerStart[top + 1];
+    const out: { i: number; sx: number; sy: number; depth: number }[] = [];
+    for (let i = 0; i < end; i++) {
+      const s = r.segs[i]; if (s.kind === 'travel' || !this.kindVisible(s.kind)) continue;
+      const z = (s.z + s.z0) / 2;
+      v.set((s.x + s.x0) / 2 - cx, (s.y + s.y0) / 2 - cy, this.flip ? H - z : z).applyMatrix4(m);
+      if (v.z > 1 || v.z < -1) continue;
+      out.push({ i, sx: rect.left + (v.x * 0.5 + 0.5) * rect.width, sy: rect.top + (-v.y * 0.5 + 0.5) * rect.height, depth: v.z });
+    }
+    return out;
+  }
+  /** Nearest printed line under the pointer (front-most among close ones). */
+  pickSeg(clientX: number, clientY: number, radius = 9): number {
+    const pts = this.projected(); let best = -1, bd = Infinity;
+    for (const p of pts) { const d = Math.hypot(p.sx - clientX, p.sy - clientY); if (d > radius) continue; const score = p.depth * 1000 + d * 0.02; if (score < bd) { bd = score; best = p.i; } }
+    return best;
+  }
+  /** Printed lines whose middle is inside a screen region (front and back: like NexSpiro, hidden kinds are skipped). */
+  selectSegs(inside: (sx: number, sy: number) => boolean): number[] { return this.projected().filter((p) => inside(p.sx, p.sy)).map((p) => p.i); }
+  get toolpath() { return this.result; }
+  get pathOn() { return !!this.result && this.showToolpath; }
+
   setVisibility(model: boolean, toolpath: boolean) {
     this.showModel = model; this.showToolpath = toolpath;
     if (this.mesh) { this.mesh.visible = model; const mt = this.mesh.material as THREE.MeshLambertMaterial; mt.transparent = model && toolpath; mt.opacity = model && toolpath ? 0.22 : 1; mt.depthWrite = !(model && toolpath); mt.needsUpdate = true; }

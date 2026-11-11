@@ -5,7 +5,9 @@
 import { PRESETS } from '../plugins/motionex/presets';
 import type { LayerEffect, LayerMode, MotionBrush, WaveShape } from '../plugins/motionex/model';
 import { effectPhase } from '../plugins/motionex/modifier';
-import { defaultDesign, estimate, makeSurface, FAMILIES, OUTLINES, profileR, RELIEFS, SECTIONS, surprise, type Design, type Family, type ProfilePoint } from './design';
+import { ALL_RELIEFS, defaultDesign, estimate, makeSurface, FAMILIES, NOISE_RELIEFS, OUTLINES, profileR, relief as reliefAt, RELIEFS, SECTIONS, surprise, type Design, type Family, type ProfilePoint } from './design';
+import { heightBytes, type HeightMap } from './reliefs';
+import { fileToMap, textToMap } from './relief-import';
 import { DEFAULT_SLICE, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
@@ -21,7 +23,8 @@ export interface StudioHost {
   control(id: string, action: 'pause' | 'resume' | 'cancel' | 'connect'): Promise<void>;
   manage(): void;
 }
-export interface StudioOptions { host?: StudioHost; download?: boolean }
+/** save: hand a finished file to the host (e.g. the artifact viewer's downloads); rejects if the viewer declines. */
+export interface StudioOptions { host?: StudioHost; download?: boolean; save?: (name: string, data: Uint8Array) => Promise<void> }
 
 // ───────── state
 interface Saved { id: string; name: string; design: Design; zones: MotionZone[]; rules?: Rule[]; at: number }
@@ -192,7 +195,34 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     persist(); snapshot();
     if (designChanged) liveMesh();
     if (result) { stale = true; }
+    if (S.step === 'motion') previewSoon();
     renderEstimate(); renderViewBar(); updateTop();
+  }
+
+  // ───────── live line preview in the Motion step (coarse slice, ~180 layers, no physics)
+  let preview: GenResult | null = null, previewTimer = 0, pathStep: State['step'] | null = null;
+  const curPath = () => (S.step === 'motion' ? preview : S.step === 'slice' ? result : null);
+  function previewNow() {
+    clearTimeout(previewTimer);
+    const lh = S.slice.layerHeight, H = S.design.height, plh = Math.max(lh, H / 180);
+    preview = slice(S.design, { ...S.slice, layerHeight: plh, firstLayerHeight: Math.max(S.slice.firstLayerHeight, plh), reachLayerHeight: lh }, S.zones, brushOf, S.rules);
+    if (S.step !== 'motion') return;
+    view.ruleColors = S.rules.map((r) => (r.enabled ? r.color : ''));
+    view.flip = S.slice.flip; view.style = 'lines'; view.colorBy = 'rules';
+    view.setToolpath(preview, [S.slice.bedX, S.slice.bedY], null);
+    view.setVisibility(showModel, showToolpath);
+    renderLayerBar();
+  }
+  function previewSoon() { clearTimeout(previewTimer); previewTimer = window.setTimeout(previewNow, 250); }
+  /** Put the right thing in the 3D view for the current step. */
+  function syncPath() {
+    if (pathStep === S.step) return;
+    pathStep = S.step;
+    view.maxLayer = Infinity;
+    if (S.step === 'design') { showModel = true; showToolpath = false; view.setToolpath(null, [0, 0]); }
+    else if (S.step === 'motion') { showModel = false; showToolpath = true; previewNow(); }
+    else { view.style = S.pathStyle; view.colorBy = S.colorBy; view.flip = S.slice.flip; view.ruleColors = S.rules.map((r) => r.color); view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); showToolpath = !!result; showModel = !result; }
+    view.setVisibility(showModel, showToolpath);
   }
 
   const doSlice = () => {
@@ -201,13 +231,18 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       result = slice(S.design, S.slice, S.zones, brushOf, S.rules);
       sim = simulate(result, S.slice, S.physics);
       stale = false; showToolpath = true;
-      view.maxLayer = Infinity; view.flip = S.slice.flip; view.style = S.pathStyle; view.colorBy = S.colorBy;
-      view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim);
+      view.maxLayer = Infinity; view.flip = S.slice.flip; view.style = S.pathStyle; view.colorBy = S.colorBy; view.ruleColors = S.rules.map((r) => r.color);
+      view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); pathStep = 'slice';
       view.setVisibility(showModel = false, true);
       renderAll();
     }, 20);
   };
 
+  async function saveOut(b: HTMLButtonElement, name: string, data: Uint8Array) {
+    if (opts.save) { try { await opts.save(name, data); flash(b, 'Saved'); } catch (e) { const c = (e as { code?: string })?.code; flash(b, c === 'declined' ? 'Not saved' : 'Saving is not available here'); } return; }
+    if (!canDownload) { flash(b, 'Downloads are blocked here'); return; }
+    download(name, new Blob([data as BlobPart]));
+  }
   // ───────── top bar behaviour
   saveB.onclick = () => {
     const lib = lsArr<Saved>(LIB);
@@ -221,8 +256,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   themeB.onclick = () => { const dark = !(root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches)); S.theme = dark ? 'dark' : 'light'; root.dataset.theme = S.theme; persist(); view.setTheme(dark); };
   exportB.onclick = () => {
     const stl = stlFromDesign(S.design);
-    if (!canDownload) { flash(exportB, 'Downloads are blocked here'); return; }
-    download(`${slug(S.design.name)}.stl`, new Blob([stl], { type: 'model/stl' }));
+    void saveOut(exportB, `${slug(S.design.name)}.stl`, new Uint8Array(stl as ArrayBuffer));
   };
   nameIn.oninput = () => { S.design.name = nameIn.value || 'Untitled piece'; persist(); };
   const onKey = (e: KeyboardEvent) => {
@@ -359,6 +393,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     return w;
   };
   const D = () => S.design;
+  let reliefQuery = '', reliefGroup = '', importText = '', importFont = 'Georgia, serif';
+  const importOpts = { soften: 1, lineWidth: 0.012, fillClosed: false };
   const dChange = () => changed(true);
 
   function designPanel() {
@@ -396,22 +432,64 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         row('Wall', num(() => D().wall, (v) => (D().wall = v), 0.8, 6, 0.1, 'mm', dChange)),
         row('Open bottom', toggle(() => D().openBottom, (v) => (D().openBottom = v), dChange))));
     } else if (S.designTab === 'relief') {
-      const groups = [...new Set(RELIEFS.map((r) => r.group))];
-      const chips = h('div', { class: 'mxs-chips mxs-chips-3' });
-      for (const g of groups) for (const r of RELIEFS.filter((x) => x.group === g)) {
-        const b = h('button', { class: `mxs-chip${D().relief.kind === r.id ? ' on' : ''}` }, reliefIcon(r.id), h('span', {}, r.name));
-        b.onclick = () => { D().relief = { ...D().relief, kind: r.id, count: r.count, depth: r.depth }; dChange(); renderPanel(); };
-        chips.append(b);
-      }
       const rl = D().relief;
-      right.append(group('Relief / surface', chips,
-        rl.kind !== 'smooth' ? row('Count', num(() => rl.count, (v) => (rl.count = v), 2, 200, 1, '', dChange)) : null,
-        rl.kind !== 'smooth' ? row('Depth', num(() => rl.depth, (v) => (rl.depth = v), 0, 8, 0.1, 'mm', dChange), rl.depth > D().wall * 1.5 ? `Deeper than ${(D().wall * 1.5).toFixed(1)} mm thins the wall.` : undefined) : null,
-        rl.kind !== 'smooth' ? h('div', { class: 'mxs-sub' }, h('b', {}, 'Range (where it applies)'),
-          row('Start', num(() => rl.start * 100, (v) => (rl.start = v / 100), 0, 100, 1, '%', dChange)),
-          row('End', num(() => rl.end * 100, (v) => (rl.end = v / 100), 0, 100, 1, '%', dChange)),
-          row('Transition', num(() => rl.transition * 100, (v) => (rl.transition = v / 100), 0, 30, 1, '%', dChange))) : null,
-        h('p', { class: 'mxs-hint' }, 'Mesh reliefs are part of the shape. For nozzle-path effects, add motions in the Motion step.')));
+      const search = h('input', { type: 'search', class: 'mxs-search', placeholder: `Search ${ALL_RELIEFS.length} reliefs…`, value: reliefQuery, 'aria-label': 'Search reliefs' }) as HTMLInputElement;
+      const grpSel = select<string>([['', 'All regions & styles'], ...[...new Set(ALL_RELIEFS.map((r) => r.group))].map((g) => [g, g] as [string, string])], () => reliefGroup, (v) => { reliefGroup = v; fillChips(); });
+      const chips = h('div', { class: 'mxs-rlist' });
+      const fillChips = () => {
+        chips.innerHTML = '';
+        const q = reliefQuery.toLowerCase();
+        const list = ALL_RELIEFS.filter((r) => (!reliefGroup || r.group === reliefGroup) && (!q || r.name.toLowerCase().includes(q) || r.group.toLowerCase().includes(q)));
+        for (const g of [...new Set(list.map((r) => r.group))]) {
+          chips.append(h('div', { class: 'mxs-cat' }, g));
+          const grid = h('div', { class: 'mxs-chips mxs-chips-3' });
+          for (const r of list.filter((x) => x.group === g)) {
+            const b = h('button', { class: `mxs-chip mxs-rchip${rl.kind === r.id ? ' on' : ''}`, title: `${r.name} · ${r.group}` }, reliefIcon(r.id), h('span', {}, r.name));
+            b.onclick = () => { D().relief = { ...D().relief, kind: r.id, count: r.count, depth: r.depth }; dChange(); renderPanel(); };
+            grid.append(b);
+          }
+          chips.append(grid);
+        }
+        if (!list.length) chips.append(h('p', { class: 'mxs-hint' }, 'No relief matches.'));
+      };
+      search.oninput = () => { reliefQuery = search.value; fillChips(); };
+      fillChips();
+      right.append(group('Relief / surface', h('div', { class: 'mxs-inl' }, search, grpSel), chips));
+      requestAnimationFrame(() => chips.querySelector('.mxs-rchip.on')?.scrollIntoView({ block: 'nearest' }));
+      if (rl.kind !== 'smooth') {
+        const custom = !RELIEFS.some((x) => x.id === rl.kind);
+        right.append(group(`Edit · ${ALL_RELIEFS.find((x) => x.id === rl.kind)?.name ?? (rl.kind === 'image' ? 'Imported' : rl.kind)}`,
+          row(rl.kind === 'image' ? 'Repeats around' : 'Count around', num(() => rl.count, (v) => (rl.count = v), 1, 200, 1, '', dChange)),
+          row('Depth', num(() => rl.depth, (v) => (rl.depth = v), -8, 8, 0.1, 'mm', dChange), Math.abs(rl.depth) > D().wall * 1.5 ? `Deeper than ${(D().wall * 1.5).toFixed(1)} mm thins the wall.` : 'Negative depth carves in.'),
+          custom ? row('Cell height', num(() => rl.aspect ?? 1, (v) => (rl.aspect = v), 0.2, 5, 0.05, '×', dChange)) : null,
+          custom ? row('Slant', num(() => rl.slant ?? 0, (v) => (rl.slant = v), -60, 60, 1, '°', dChange)) : null,
+          custom ? row('Row offset', num(() => rl.rowShift ?? 0, (v) => (rl.rowShift = v), 0, 1, 0.05, '', dChange)) : null,
+          custom ? row('Sharpness', num(() => rl.sharp ?? 1, (v) => (rl.sharp = v), 0.2, 4, 0.05, '', dChange)) : null,
+          custom ? row('Invert', toggle(() => !!rl.invert, (v) => (rl.invert = v), dChange)) : null,
+          NOISE_RELIEFS.has(rl.kind) ? row('Variation', num(() => rl.seed ?? 1, (v) => (rl.seed = v), 1, 99, 1, '', dChange)) : null,
+          rl.kind === 'image' ? row('Placement', select<'tile' | 'band'>([['tile', 'Tile (square cells)'], ['band', 'Fit the range height']], () => rl.mapMode ?? 'tile', (v) => (rl.mapMode = v), () => { dChange(); renderPanel(); })) : null,
+          rl.kind === 'image' && rl.mapMode === 'band' ? row('Repeats up', num(() => rl.tilesUp ?? 1, (v) => (rl.tilesUp = v), 1, 50, 1, '', dChange)) : null,
+          h('div', { class: 'mxs-sub' }, h('b', {}, 'Range (where it applies)'),
+            row('Start', num(() => rl.start * 100, (v) => (rl.start = v / 100), 0, 100, 1, '%', dChange)),
+            row('End', num(() => rl.end * 100, (v) => (rl.end = v / 100), 0, 100, 1, '%', dChange)),
+            row('Transition', num(() => rl.transition * 100, (v) => (rl.transition = v / 100), 0, 30, 1, '%', dChange)))));
+      }
+      // import
+      const fileIn = h('input', { type: 'file', accept: '.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,.dxf,image/*', hidden: true }) as HTMLInputElement;
+      const status = h('p', { class: 'mxs-hint' });
+      const useMap = (m: HeightMap) => { D().relief = { ...D().relief, kind: 'image', map: m, count: D().relief.kind === 'image' ? D().relief.count : 6, depth: D().relief.kind === 'image' ? D().relief.depth : 1.5, mapMode: D().relief.mapMode ?? 'tile' }; dChange(); renderPanel(); };
+      fileIn.onchange = async () => { const f = fileIn.files?.[0]; if (!f) return; status.textContent = `Reading ${f.name}…`; try { useMap(await fileToMap(f, importOpts)); } catch (e) { status.textContent = `Could not read ${f.name}: ${String((e as Error)?.message ?? e)}`; } };
+      const up = h('button', { class: 'mxs-btn mxs-wide' }, icon('export'), 'Upload image, SVG or DXF…'); up.onclick = () => fileIn.click();
+      const txt = h('input', { type: 'text', placeholder: 'Text or monogram', value: importText, 'aria-label': 'Relief text' }) as HTMLInputElement; txt.oninput = () => (importText = txt.value);
+      const font = select<string>([['Georgia, serif', 'Serif'], ['system-ui, sans-serif', 'Sans'], ['"Courier New", monospace', 'Mono'], ['"Brush Script MT", cursive', 'Script'], ['Impact, sans-serif', 'Bold']], () => importFont, (v) => (importFont = v));
+      const useTxt = h('button', { class: 'mxs-btn mxs-sm' }, 'Use text'); useTxt.onclick = () => { if (importText.trim()) useMap(textToMap(importText, importFont, importOpts)); };
+      const prev = rl.kind === 'image' && rl.map ? mapPreview(rl.map) : null;
+      right.append(group('Your own relief', fileIn, prev, up, h('div', { class: 'mxs-inl' }, txt, font, useTxt),
+        row('Soften edges', num(() => importOpts.soften, (v) => (importOpts.soften = v), 0, 8, 0.5, 'px')),
+        row('DXF line width', num(() => importOpts.lineWidth * 100, (v) => (importOpts.lineWidth = v / 100), 0.2, 6, 0.1, '%')),
+        row('Fill closed DXF shapes', toggle(() => importOpts.fillClosed, (v) => (importOpts.fillClosed = v))),
+        status,
+        h('p', { class: 'mxs-hint' }, 'Dark parts are raised (use Invert to carve them). Photos work best with strong contrast; logos and line art give crisp reliefs. Settings above apply to the next import.')));
     } else {
       const c = h('input', { type: 'color', value: S.color, 'aria-label': 'Colour' }) as HTMLInputElement;
       c.oninput = () => { S.color = c.value; persist(); view.setDesign(S.design, S.color); };
@@ -550,18 +628,52 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   }
   const ring = (z: number, neg: boolean) => ({ z0: z - lhNow() / 2, z1: z + lhNow() / 2, a0: 0, a1: 1, ...(neg ? { neg } : {}) });
   const dab = (hit: { z: number; a: number; r: number }, R: number, neg: boolean) => { const da = R / (Math.PI * 2 * Math.max(1, hit.r)); return { z0: hit.z - R, z1: hit.z + R, a0: hit.a - da, a1: hit.a + da, ...(neg ? { neg } : {}) }; };
+  type LK = 'outer' | 'inner' | 'base' | 'top';
+  const kindOf = (k: string): LK => (k === 'inner' ? 'inner' : k === 'base' ? 'base' : k === 'top' ? 'top' : 'outer');
+  /** Design-space height of a printed layer. */
+  const layerDesignZ = (res: GenResult, layer: number) => (S.slice.flip ? S.design.height - res.layerZ[layer] : res.layerZ[layer]);
+  /** What is under the pointer: a printed line when lines are shown, else the model surface. */
+  function hitAt(x: number, y: number): { z: number; a: number; r: number; kind?: LK; seg?: number } | null {
+    const res = view.toolpath;
+    if (view.pathOn && res) {
+      const i = view.pickSeg(x, y); if (i < 0) return null;
+      const g = res.segs[i], mx = (g.x + g.x0) / 2 - S.slice.bedX / 2, my = (g.y + g.y0) / 2 - S.slice.bedY / 2;
+      return { z: layerDesignZ(res, g.layer), a: ((Math.atan2(my, mx) / (Math.PI * 2)) + 1) % 1, r: Math.hypot(mx, my), kind: kindOf(g.kind), seg: i };
+    }
+    return view.pick(x, y);
+  }
+  /** First selection of a rule decides which kinds of line it changes (as NexSpiro). */
+  function claimKinds(rule: Rule, kinds: Set<LK>, neg: boolean) {
+    if (neg || !kinds.size) return;
+    if (!rule.rects.some((q) => !q.neg)) rule.lines = { outer: kinds.has('outer'), inner: kinds.has('inner'), base: kinds.has('base'), top: kinds.has('top') };
+    else for (const k of kinds) rule.lines[k] = true;
+  }
+  function segsToRects(idx: number[], neg: boolean) {
+    const res = view.toolpath!; const N = 720, byLayer = new Map<number, boolean[]>(); const kinds = new Set<LK>();
+    for (const i of idx) {
+      const g = res.segs[i]; kinds.add(kindOf(g.kind));
+      let cells = byLayer.get(g.layer); if (!cells) { cells = new Array<boolean>(N).fill(false); byLayer.set(g.layer, cells); }
+      for (const [x, y] of [[g.x0, g.y0], [g.x, g.y]]) { const a = ((Math.atan2(y - S.slice.bedY / 2, x - S.slice.bedX / 2) / (Math.PI * 2)) + 1) % 1; cells[Math.floor(a * N) % N] = true; }
+    }
+    // close one-cell gaps so a run of picked segments stays one patch
+    for (const cells of byLayer.values()) for (let j = 0; j < N; j++) if (!cells[j] && cells[(j + N - 1) % N] && cells[(j + 1) % N]) cells[j] = true;
+    const rows = [...byLayer.entries()].map(([l, cells]) => ({ z: layerDesignZ(res, l), dz: lhNow() / 2, cells }));
+    return { rects: rowsToRects(rows, neg), kinds };
+  }
   let drag: { tool: Tool; x: number; y: number; neg: boolean; pts: [number, number][]; z0?: number; band?: number; last?: [number, number] } | null = null;
   const cv = view.canvas;
   cv.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || toolBar.hidden || S.tool === 'orbit') return;
     const neg = S.erase || e.ctrlKey || e.metaKey;
-    const hit = view.pick(e.clientX, e.clientY);
+    const hit = hitAt(e.clientX, e.clientY);
     const rule = ensureRule();
     const tool = S.tool === 'line' && e.altKey ? 'segment' : S.tool;
-    if (tool === 'line') { if (hit) { rule.rects.push(ring(hit.z, neg)); commitSel(); } return; }
-    if (tool === 'segment') { if (hit) { const d = dab(hit, Math.max(1.5, S.brushR / 2), neg); d.z0 = hit.z - lhNow() / 2; d.z1 = hit.z + lhNow() / 2; rule.rects.push(d); commitSel(); } return; }
+    const claim = () => { if (hit?.kind) claimKinds(rule, new Set([hit.kind]), neg); };
+    if (tool === 'line') { if (hit) { claim(); rule.rects.push(ring(hit.z, neg)); commitSel(); } return; }
+    if (tool === 'segment') { if (hit) { claim(); const d = dab(hit, Math.max(1.5, S.brushR / 2), neg); d.z0 = hit.z - lhNow() / 2; d.z1 = hit.z + lhNow() / 2; rule.rects.push(d); commitSel(); } return; }
     cv.setPointerCapture(e.pointerId);
     drag = { tool, x: e.clientX, y: e.clientY, neg, pts: [[e.clientX, e.clientY]] };
+    if ((tool === 'brush' || tool === 'band') && hit) claim();
     if (tool === 'brush' && hit) { rule.rects.push(dab(hit, S.brushR, neg)); drag.last = [e.clientX, e.clientY]; paintSoon(); }
     if (tool === 'band' && hit) { drag.z0 = hit.z; rule.rects.push({ z0: hit.z - lhNow() / 2, z1: hit.z + lhNow() / 2, a0: 0, a1: 1, ...(neg ? { neg } : {}) }); drag.band = rule.rects.length - 1; paintSoon(); }
   });
@@ -570,10 +682,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const rule = activeRule(); if (!rule) return;
     if (drag.tool === 'brush') {
       if (drag.last && Math.hypot(e.clientX - drag.last[0], e.clientY - drag.last[1]) < 5) return;
-      const hit = view.pick(e.clientX, e.clientY); if (!hit) return;
+      const hit = hitAt(e.clientX, e.clientY); if (!hit) return;
       rule.rects.push(dab(hit, S.brushR, drag.neg)); drag.last = [e.clientX, e.clientY]; paintSoon();
     } else if (drag.tool === 'band' && drag.band != null && drag.z0 != null) {
-      const hit = view.pick(e.clientX, e.clientY); if (!hit) return;
+      const hit = hitAt(e.clientX, e.clientY); if (!hit) return;
       const r = rule.rects[drag.band]; r.z0 = Math.min(drag.z0, hit.z) - lhNow() / 2; r.z1 = Math.max(drag.z0, hit.z) + lhNow() / 2; paintSoon();
     } else if (drag.tool === 'box') {
       const sr = stage.getBoundingClientRect();
@@ -594,16 +706,37 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     if (rule && d.tool === 'box') {
       marquee.hidden = true;
       const x0 = Math.min(d.x, e.clientX), x1 = Math.max(d.x, e.clientX), y0 = Math.min(d.y, e.clientY), y1 = Math.max(d.y, e.clientY);
-      if (x1 - x0 > 3 && y1 - y0 > 3) rule.rects.push(...rowsToRects(view.selectScreen((x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1), d.neg));
+      const inBox = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+      if (x1 - x0 > 3 && y1 - y0 > 3) {
+        if (view.pathOn) { const q = segsToRects(view.selectSegs(inBox), d.neg); claimKinds(rule, q.kinds, d.neg); rule.rects.push(...q.rects); }
+        else rule.rects.push(...rowsToRects(view.selectScreen(inBox), d.neg));
+      }
     } else if (rule && d.tool === 'lasso') {
       lassoSvg.classList.remove('on'); lassoPath.setAttribute('points', '');
-      if (d.pts.length > 4) rule.rects.push(...rowsToRects(view.selectScreen((x, y) => inPoly(x, y, d.pts)), d.neg));
+      if (d.pts.length > 4) {
+        const inL = (x: number, y: number) => inPoly(x, y, d.pts);
+        if (view.pathOn) { const q = segsToRects(view.selectSegs(inL), d.neg); claimKinds(rule, q.kinds, d.neg); rule.rects.push(...q.rects); }
+        else rule.rects.push(...rowsToRects(view.selectScreen(inL), d.neg));
+      }
     }
     commitSel();
   });
-  function commitSel() { changed(false); paintRules(); renderPanel(); }
+  function commitSel() { changed(false); paintRules(); renderPanel(); previewSoon(); }
 
+  function showLinesGroup() {
+    const v = view.visible;
+    const res = preview;
+    const count = (k: LK) => (res ? new Set(res.segs.filter((g) => g.kind !== 'travel' && kindOf(g.kind) === k).map((g) => g.layer)).size : 0);
+    const box = (k: LK, label: string) => { const n = count(k); return h('label', { class: `mxs-check${n ? '' : ' mxs-dim'}` }, toggle(() => v[k], (on) => view.setKindsVisible({ [k]: on }), () => renderTools()), `${label}`, h('small', { class: 'mxs-muted' }, n ? `${n} layers` : 'none')); };
+    const all = h('button', { class: 'mxs-linkb' }, 'All'); all.onclick = () => { view.setKindsVisible({ outer: true, inner: true, base: true, top: true }); renderPanel(); };
+    return group('Show lines', h('div', { class: 'mxs-checks mxs-checks-col' }, box('outer', 'Outer wall'), box('inner', 'Inner walls'), box('base', 'Bottom layers'), box('top', 'Top layers'), all),
+      h('p', { class: 'mxs-hint' }, 'Hidden lines can’t be picked or brushed, so you can hide the rest and work on one kind at a time. Use the slider under the view to cut down to any layer.'),
+      row('Inner walls', num(() => S.slice.innerWalls, (x) => (S.slice.innerWalls = x), 0, 5, 1, '', () => { changed(false); previewNow(); renderPanel(); })),
+      row('Bottom layers', num(() => S.slice.baseLayers, (x) => (S.slice.baseLayers = x), 0, 12, 1, '', () => { changed(false); previewNow(); renderPanel(); })),
+      row('Top layers', num(() => S.slice.topLayers ?? 0, (x) => (S.slice.topLayers = x), 0, 12, 1, '', () => { changed(false); previewNow(); renderPanel(); }), 'Closes the top (lids, pendants printed upright).'));
+  }
   function bodyPanel() {
+    right.append(showLinesGroup());
     const list = h('div', { class: 'mxs-zones' });
     S.rules.forEach((r, i) => {
       const en = toggle(() => r.enabled, (v) => (r.enabled = v), () => { changed(false); paintRules(); });
@@ -627,14 +760,14 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const name = h('input', { type: 'text', value: r.name, 'aria-label': 'Rule name' }) as HTMLInputElement; name.oninput = () => { r.name = name.value; rc(); };
     const color = h('input', { type: 'color', value: r.color, 'aria-label': 'Selection colour' }) as HTMLInputElement; color.oninput = () => { r.color = color.value; persist(); paintSoon(); };
     const clear = h('button', { class: 'mxs-btn mxs-sm' }, 'Clear'); clear.onclick = () => { r.rects = []; changed(false); paintRules(); renderPanel(); };
-    const lineBox = (k: 'outer' | 'inner' | 'base', label: string) => h('label', { class: 'mxs-check' }, toggle(() => r.lines[k], (v) => (r.lines[k] = v), rp), label);
+    const lineBox = (k: LK, label: string) => h('label', { class: 'mxs-check' }, toggle(() => !!r.lines[k], (v) => (r.lines[k] = v), () => { rp(); previewSoon(); }), label);
     right.append(group('Selected rule',
       row('Name', h('div', { class: 'mxs-inl' }, name, color)),
       row('Selection', h('div', { class: 'mxs-inl' }, h('span', { class: 'mxs-muted' }, r.rects.length ? countSel(r) : 'nothing selected'), clear)),
       h('div', { class: 'mxs-sub' }, h('b', {}, 'Reach up and down'),
         row('Layers above', num(() => r.reachUp, (v) => (r.reachUp = v), 0, 400, 1, 'layers', rp)),
         row('Layers below', num(() => r.reachDown, (v) => (r.reachDown = v), 0, 400, 1, 'layers', rp))),
-      h('div', { class: 'mxs-sub' }, h('b', {}, 'Lines to change'), h('div', { class: 'mxs-checks' }, lineBox('outer', 'Outer wall'), lineBox('inner', 'Inner walls'), lineBox('base', 'Bottom layers')),
+      h('div', { class: 'mxs-sub' }, h('b', {}, 'Lines to change'), h('div', { class: 'mxs-checks' }, lineBox('outer', 'Outer wall'), lineBox('inner', 'Inner walls'), lineBox('base', 'Bottom layers'), lineBox('top', 'Top layers')),
         row('Wall shape', seg([['all', 'All'], ['curved', 'Curved parts'], ['straight', 'Straight parts']], () => r.wallShape, (v) => { r.wallShape = v; rc(); renderPanel(); })))));
     const opt = (label: string, get: () => number | null, set: (v: number | null) => void, def: number, min: number, max: number, step: number, unit: string) => {
       const on = get() != null;
@@ -682,6 +815,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       row('First layer', num(() => s.firstLayerHeight, (v) => (s.firstLayerHeight = v), 0.1, 1.2, 0.02, 'mm', sc)),
       row('Line width', num(() => s.lineWidth, (v) => (s.lineWidth = v), 0.3, 2.8, 0.01, 'mm', sc)),
       row('Bottom layers', num(() => s.baseLayers, (v) => (s.baseLayers = v), 0, 12, 1, '', sc)),
+      row('Top layers', num(() => s.topLayers ?? 0, (v) => (s.topLayers = v), 0, 12, 1, '', sc)),
       row('Extra walls', num(() => s.innerWalls, (v) => (s.innerWalls = v), 0, 5, 1, '', sc), s.spiral && s.innerWalls ? 'Spiral vase prints one line above the base.' : undefined)));
     right.append(group('Speed & temperature',
       row('Wall speed', num(() => s.speed, (v) => (s.speed = v), 5, 300, 5, 'mm/s', sc)),
@@ -716,8 +850,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       renderSimStats();
       if (result.warnings.length) outG.append(h('div', { class: 'mxs-warn' }, ...result.warnings.map((w) => h('div', {}, w))));
       if (stale) outG.append(h('p', { class: 'mxs-hint mxs-amber' }, 'You changed the piece since this slice. Slice again before printing.'));
-      const dl = h('button', { class: 'mxs-btn mxs-wide' }, icon('export'), canDownload ? 'Download G-code' : 'Copy G-code');
-      dl.onclick = () => { if (!result) return; if (canDownload) download(`${slug(S.design.name)}.gcode`, new Blob([result.gcode], { type: 'text/plain' })); else copy(dl, result.gcode); };
+      const dl = h('button', { class: 'mxs-btn mxs-wide' }, icon('export'), canDownload || opts.save ? 'Download G-code' : 'Copy G-code');
+      dl.onclick = () => { if (!result) return; if (canDownload || opts.save) void saveOut(dl, `${slug(S.design.name)}.gcode`, new TextEncoder().encode(result.gcode)); else copy(dl, result.gcode); };
       outG.append(dl);
       // send to printer
       if (S.printer?.kind === 'device' && host) {
@@ -800,9 +934,9 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     viewBar.innerHTML = '';
     const tog = (label: string, on: boolean, fn: () => void, disabled = false) => { const b = h('button', { class: `mxs-vt${on ? ' on' : ''}`, disabled }, icon('eye', 13), label); b.onclick = fn; return b; };
     viewBar.append(
-      tog('Model', showModel, () => { showModel = !showModel; if (!showModel && !showToolpath) showToolpath = !!result; view.setVisibility(showModel, showToolpath); renderViewBar(); }),
-      tog('Toolpath', showToolpath, () => { showToolpath = !showToolpath; if (!showModel && !showToolpath) showModel = true; view.setVisibility(showModel, showToolpath); renderViewBar(); renderLayerBar(); }, !result));
-    if (result && showToolpath) {
+      tog('Model', showModel, () => { showModel = !showModel; if (!showModel && !showToolpath) showToolpath = !!curPath(); view.setVisibility(showModel, showToolpath); renderViewBar(); renderTools(); }),
+      tog(S.step === 'motion' ? 'Lines' : 'Toolpath', showToolpath, () => { showToolpath = !showToolpath; if (!showModel && !showToolpath) showModel = true; view.setVisibility(showModel, showToolpath); renderViewBar(); renderLayerBar(); renderTools(); }, !curPath()));
+    if (S.step === 'slice' && result && showToolpath) {
       const st = seg<PathStyle>([['lines', 'Lines'], ['ribbons', 'Beads'], ['tubes', 'Tubes']], () => S.pathStyle, (v) => { S.pathStyle = v; persist(); view.setStyle(v); renderViewBar(); });
       st.classList.add('mxs-vseg'); st.title = 'Lines: fastest · Beads: real width and height of every line · Tubes: round beads for close-up (last 40 layers)';
       const cb = select<ColorBy>([['feature', 'Colour: line kind'], ['width', 'Colour: real width'], ['flow', 'Colour: material vs plan'], ['speed', 'Colour: real speed'], ['sag', 'Colour: sag'], ['defects', 'Colour: defects'], ['rules', 'Colour: rules'], ['height', 'Colour: height']], () => S.colorBy, (v) => { S.colorBy = v; view.colorBy = v; persist(); view.recolour(); renderViewBar(); });
@@ -825,15 +959,15 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       const cu = h('input', { type: 'color', value: S.color, 'aria-label': 'Custom model colour' }) as HTMLInputElement; cu.oninput = () => { S.color = cu.value; persist(); view.setDesign(S.design, S.color); paintRules(); };
       sw.append(cu); viewBar.append(sw);
     }
-    staleTag.hidden = !(result && stale);
+    staleTag.hidden = !(result && stale && S.step === 'slice');
     staleTag.textContent = 'Toolpath is out of date: slice again';
     renderLayerBar();
   }
   function renderLayerBar() {
     layerBar.innerHTML = '';
-    layerBar.hidden = !(result && showToolpath);
-    if (!result || !showToolpath) return;
-    const r = result;
+    const r = curPath();
+    layerBar.hidden = !(r && showToolpath);
+    if (!r || !showToolpath) return;
     const sl = h('input', { type: 'range', min: '0', max: String(r.layers - 1), value: String(Math.min(view.maxLayer, r.layers - 1)), 'aria-label': 'Layer' }) as HTMLInputElement;
     const lbl = h('span', { class: 'mxs-lbl' });
     const upd = () => { const i = +sl.value; lbl.textContent = `layer ${i + 1}/${r.layers} · z ${r.layerZ[i].toFixed(2)}`; view.maxLayer = i; view.applyLayer(); };
@@ -846,6 +980,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const onStudio = S.rail === 'studio';
     stage.hidden = !onStudio; right.hidden = !onStudio; strip.hidden = !onStudio; page.hidden = onStudio;
     body.classList.toggle('mxs-paged', !onStudio);
+    if (onStudio) syncPath();
     renderTools(); paintRules();
     if (onStudio) { renderPanel(); renderEstimate(); renderViewBar(); (stage.querySelector('.mxs-crumb') as HTMLElement).textContent = `Motionex · ${S.step === 'design' ? 'Design' : S.step === 'motion' ? 'Motion' : 'Slice'} · ${FAMILIES.find((f) => f.id === S.design.family)?.name}`; }
     else renderPage();
@@ -946,20 +1081,29 @@ function sectionIcon(id: string) {
   }
   return c;
 }
+const iconCache = new Map<string, HTMLCanvasElement>();
 function reliefIcon(id: string) {
-  const c = document.createElement('canvas'); c.width = 40; c.height = 28; const g = c.getContext('2d')!;
-  g.strokeStyle = '#8a8f99'; g.lineWidth = 1.4;
-  const line = (f: (x: number) => number, y0: number) => { g.beginPath(); for (let x = 2; x <= 38; x++) { const y = y0 + f(x); if (x === 2) g.moveTo(x, y); else g.lineTo(x, y); } g.stroke(); };
-  switch (id) {
-    case 'smooth': g.beginPath(); g.arc(20, 14, 9, 0, Math.PI * 2); g.stroke(); break;
-    case 'ribbed': case 'grooves': case 'fins': for (let x = 6; x <= 34; x += id === 'fins' ? 9 : 5) { g.beginPath(); g.moveTo(x, 4); g.lineTo(x, 24); g.stroke(); } break;
-    case 'rings': for (let y = 6; y <= 22; y += 5) { g.beginPath(); g.moveTo(4, y); g.lineTo(36, y); g.stroke(); } break;
-    case 'wavy': case 'guilloche': case 'vwaves': for (let y = 7; y <= 21; y += 7) line((x) => 2.5 * Math.sin(x / 3 + (id === 'guilloche' ? y : 0)), y); break;
-    case 'bubbles': case 'bumps': for (let x = 8; x <= 32; x += 8) for (let y = 8; y <= 20; y += 8) { g.beginPath(); g.arc(x + (y % 16 ? 4 : 0), y, 3, 0, Math.PI * 2); g.stroke(); } break;
-    case 'pyramid': case 'diamond': for (let x = 6; x <= 30; x += 8) { g.beginPath(); g.moveTo(x, 20); g.lineTo(x + 4, 8); g.lineTo(x + 8, 20); g.stroke(); } break;
-    default: for (let i = 0; i < 26; i++) { g.beginPath(); g.arc(4 + ((i * 37) % 32), 4 + ((i * 53) % 20), 1, 0, Math.PI * 2); g.stroke(); }
+  let src = iconCache.get(id);
+  if (!src) {
+    const W = 48, H = 32; src = document.createElement('canvas'); src.width = W; src.height = H;
+    const g = src.getContext('2d')!;
+    const r = ALL_RELIEFS.find((x) => x.id === id);
+    const n = Math.max(1, r?.count ?? 12), R = 50, cell = (Math.PI * 2 * R) / n;
+    const d = { ...defaultDesign('vase'), height: cell * 2, relief: { kind: id, count: n, depth: 1, start: 0, end: 1, transition: 0.001 } } as Design;
+    const vals = new Float32Array(W * H); let lo = Infinity, hi = -Infinity;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = reliefAt(d, 1 - (y + 0.5) / H, ((x + 0.5) / W) * (Math.PI * 2) * (3 / n), R); vals[y * W + x] = v; lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    const img = g.createImageData(W, H);
+    for (let i = 0; i < W * H; i++) { const t = hi > lo ? (vals[i] - lo) / (hi - lo) : 0.5; const c = 95 + t * 140; img.data[i * 4] = c; img.data[i * 4 + 1] = c * 0.97; img.data[i * 4 + 2] = c * 0.93; img.data[i * 4 + 3] = 255; }
+    g.putImageData(img, 0, 0);
+    iconCache.set(id, src);
   }
-  return c;
+  const c = document.createElement('canvas'); c.width = src.width; c.height = src.height; c.className = 'mxs-ricon'; c.getContext('2d')!.drawImage(src, 0, 0); return c;
+}
+function mapPreview(m: HeightMap) {
+  const c = document.createElement('canvas'); c.width = m.w; c.height = m.h; c.className = 'mxs-mapprev';
+  const g = c.getContext('2d')!, img = g.createImageData(m.w, m.h), b = heightBytes(m);
+  for (let i = 0; i < b.length; i++) { const v = 255 - b[i]; img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255; }
+  g.putImageData(img, 0, 0); return c;
 }
 function layerGraph(eff: LayerEffect | null, H: number, lh: number) {
   const c = document.createElement('canvas'); c.className = 'mxs-lgraph'; c.width = 560; c.height = 120;

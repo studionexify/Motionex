@@ -4,7 +4,15 @@
 
 export type Family = 'vase' | 'pendant' | 'shade' | 'bowl';
 export type SectionKind = 'round' | 'faceted' | 'square' | 'petal' | 'star' | 'fluted' | 'flower' | 'teeth';
-export type ReliefKind = 'smooth' | 'ribbed' | 'grooves' | 'fins' | 'rings' | 'wavy' | 'guilloche' | 'vwaves' | 'bubbles' | 'bumps' | 'pyramid' | 'diamond' | 'hammered' | 'sand';
+export type BaseRelief = 'smooth' | 'ribbed' | 'grooves' | 'fins' | 'rings' | 'wavy' | 'guilloche' | 'vwaves' | 'bubbles' | 'bumps' | 'pyramid' | 'diamond' | 'hammered' | 'sand';
+/** A built-in relief, a pattern id from reliefs.ts, or 'image' (imported picture / SVG / DXF / text). */
+export type ReliefKind = BaseRelief | (string & {});
+export interface Relief {
+  kind: ReliefKind; count: number; depth: number; start: number; end: number; transition: number;
+  aspect?: number; slant?: number; invert?: boolean; sharp?: number; seed?: number; rowShift?: number;
+  map?: HeightMap; mapMode?: 'tile' | 'band'; tilesUp?: number;
+}
+import { PATTERNS, patternById, sampleMap, type HeightMap } from './reliefs';
 export type TwistShape = 'linear' | 's' | 'wave';
 
 export interface ProfilePoint { r: number; t: number } // r: 0..1 of max radius, t: 0..1 of height
@@ -22,7 +30,7 @@ export interface Design {
   twist: number;         // degrees over the height
   twistShape: TwistShape;
   narrowTop: number;     // -0.6..0.6
-  relief: { kind: ReliefKind; count: number; depth: number; start: number; end: number; transition: number };
+  relief: Relief;
   wall: number;          // mm, for the STL wall and estimate
   openBottom: boolean;
 }
@@ -138,7 +146,7 @@ function vnoise(x: number, y: number, z: number) {
 }
 
 /** Relief offset in mm (outward positive) at height t and angle θ for a wall of base radius R. */
-function relief(d: Design, t: number, th: number, R: number): number {
+export function relief(d: Design, t: number, th: number, R: number): number {
   const rl = d.relief;
   if (rl.kind === 'smooth' || rl.depth === 0) return 0;
   const tr = Math.max(1e-3, rl.transition);
@@ -162,6 +170,21 @@ function relief(d: Design, t: number, th: number, R: number): number {
     case 'diamond': f = Math.max(0, 1 - Math.abs(2 * frac(u) - 1) - Math.abs(2 * frac(v) - 1)); break;
     case 'hammered': { const s = n / 30 / 6; f = 2 * vnoise(Math.cos(th) * R * s, Math.sin(th) * R * s, z * s) - 1; break; }
     case 'sand': { const s = n / 120; f = 2 * vnoise(Math.cos(th) * R * s, Math.sin(th) * R * s, z * s) - 1; break; }
+    default: {
+      // pattern library / imported height map
+      const vv = v / Math.max(0.1, rl.aspect ?? 1);
+      const uu = u + vv * Math.tan(((rl.slant ?? 0) * Math.PI) / 180) + Math.floor(vv) * (rl.rowShift ?? 0);
+      if (rl.kind === 'image') {
+        if (!rl.map) return 0;
+        const y = rl.mapMode === 'band' ? 1 - frac(clamp((t - rl.start) / Math.max(1e-3, rl.end - rl.start), 0, 0.9999) * Math.max(1, rl.tilesUp ?? 1)) : 1 - frac(vv);
+        f = sampleMap(rl.map, uu, y);
+      } else {
+        const p = patternById(rl.kind); if (!p) return 0;
+        f = clamp(p.fn(uu, vv, rl.seed ?? 1), 0, 1);
+      }
+      if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1);
+      if (rl.invert) f = 1 - f;
+    }
   }
   return f * rl.depth * band;
 }
@@ -231,3 +254,10 @@ export function surprise(family: Family): Design {
   for (let k = 0; k < 6 && overhang(d) > 50; k++) d.height *= 1.15;
   return d;
 }
+
+/** Every relief the UI offers: the basics plus the pattern library, grouped. */
+export const ALL_RELIEFS: { id: ReliefKind; name: string; group: string; count: number; depth: number }[] = [
+  ...RELIEFS.map((r) => ({ ...r, group: 'Basics' })),
+  ...PATTERNS.map((p) => ({ id: p.id, name: p.name, group: p.group, count: p.count, depth: p.depth })),
+];
+export const NOISE_RELIEFS = new Set(['hammered', 'sand', ...PATTERNS.filter((p) => p.noise).map((p) => p.id)]);

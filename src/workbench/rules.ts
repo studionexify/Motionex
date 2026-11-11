@@ -11,7 +11,7 @@ export interface Rule {
   id: string; name: string; enabled: boolean; color: string;
   rects: Rect[];
   reachUp: number; reachDown: number;          // extra layers above / below the selection
-  lines: { outer: boolean; inner: boolean; base: boolean };
+  lines: { outer: boolean; inner: boolean; base: boolean; top?: boolean };
   wallShape: 'all' | 'curved' | 'straight';
   // change there
   brushId: string | null; size: number; spacing: number; phase: number;
@@ -25,7 +25,7 @@ export const RULE_COLORS = ['#e8467c', '#2f9be8', '#f2a31b', '#3fbf7f', '#9b5de5
 export function newRule(n: number): Rule {
   return {
     id: Math.random().toString(36).slice(2, 9), name: `Selection ${n}`, enabled: true, color: RULE_COLORS[(n - 1) % RULE_COLORS.length],
-    rects: [], reachUp: 0, reachDown: 0, lines: { outer: true, inner: true, base: false }, wallShape: 'all',
+    rects: [], reachUp: 0, reachDown: 0, lines: { outer: true, inner: true, base: false, top: false }, wallShape: 'all',
     brushId: null, size: 1, spacing: 1, phase: 0, layers: null, useBrushLayers: true, speed: null, flow: null, temp: null, soft: 2,
   };
 }
