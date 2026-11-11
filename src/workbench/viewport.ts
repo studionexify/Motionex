@@ -99,8 +99,10 @@ export class StudioView {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
     this.controls.minPolarAngle = 0; this.controls.maxPolarAngle = Math.PI;
-    this.controls.zoomToCursor = true; this.controls.screenSpacePanning = true;
-    this.controls.rotateSpeed = 0.9; this.controls.zoomSpeed = 1.2;
+    // Like Bambu Studio / PrusaSlicer: a fixed 0.8° per pixel dragged (set on resize), pivot stays on the
+    // piece (zoom goes straight in, so rotation never swings round a point you zoomed past), screen-space pan.
+    this.controls.zoomToCursor = false; this.controls.screenSpacePanning = true; this.controls.zoomSpeed = 1.0;
+    this.controls.enableRotate = true;
     this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
     this.controls.addEventListener('change', () => this.draw());
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x9a9ea6, 2.1));
@@ -115,7 +117,9 @@ export class StudioView {
 
   private resize() {
     const w = this.host.clientWidth, h = this.host.clientHeight; if (!w || !h) return;
-    this.renderer.setSize(w, h, false); this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.draw();
+    this.renderer.setSize(w, h, false); this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+    if (this.controls) this.controls.rotateSpeed = (0.8 * h) / 360;   // OrbitControls turns 360°·speed/height per pixel
+    this.draw();
   }
   draw() { cancelAnimationFrame(this.pending); this.pending = requestAnimationFrame(() => this.renderer.render(this.scene, this.camera)); }
 
@@ -214,8 +218,8 @@ export class StudioView {
   fit() {
     const h = this.height, r = this.gridSize / 2;
     const dist = Math.max(h, r * 2) * 2.1;
-    this.controls.target.set(0, 0, h * 0.45);
-    this.camera.position.set(dist * 0.75, -dist * 0.95, h * 0.45 + dist * 0.42);
+    this.controls.target.set(0, 0, h * 0.5);
+    this.camera.position.set(dist * 0.75, -dist * 0.95, h * 0.5 + dist * 0.42);
     this.camera.up.set(0, 0, 1); this.camera.lookAt(this.controls.target);
     this.controls.update(); this.draw();
   }
