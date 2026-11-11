@@ -112,11 +112,11 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const saveB = h('button', { class: 'mxs-ib', title: 'Save to library', 'aria-label': 'Save' }, icon('save'));
   const surpriseB = h('button', { class: 'mxs-ib', title: 'Surprise me: a random design', 'aria-label': 'Surprise me' }, icon('spark'));
   const themeB = h('button', { class: 'mxs-ib', title: 'Light / dark', 'aria-label': 'Toggle theme' }, icon('moon'));
-  const exportB = h('button', { class: 'mxs-btn mxs-accent' }, icon('export'), 'Export STL');
+  const exportB = h('button', { class: 'mxs-btn mxs-wide' }, icon('export'), 'Export model (STL)');
   const printerSel = h('select', { class: 'mxs-printer', id: 'mxs-printer', 'aria-label': 'Printer' }) as HTMLSelectElement;
   const printerBox = h('label', { class: 'mxs-printer-box', for: 'mxs-printer' }, icon('printer'), printerSel);
   const steps = h('div', { class: 'mxs-steps', role: 'tablist' });
-  const sliceTopB = h('button', { class: 'mxs-btn mxs-slicebtn', title: 'Slice and preview the print' }, icon('slice'), 'Slice');
+  const sliceTopB = h('button', { class: 'mxs-btn mxs-accent mxs-slicebtn', title: 'Slice: make the G-code and preview the print' }, icon('slice', 17), 'Slice');
   sliceTopB.onclick = () => { const need = !result || stale; S.step = 'slice'; S.rail = 'studio'; renderAll(); if (need) doSlice(); };
   // UI scale (20–250 %), from the settings button at the top left
   const SCALE_KEY = 'motionex.uiScale';
@@ -143,7 +143,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     h('div', { class: 'mxs-brand' }, h('b', {}, 'Motionex'), h('small', {}, 'Studio'), h('span', { class: 'mxs-popwrap' }, settingsB, settingsPop)),
     h('div', { class: 'mxs-tgroup' }, undoB, redoB, nameIn, saveB),
     steps,
-    h('div', { class: 'mxs-tgroup mxs-right' }, printerBox, sliceTopB, surpriseB, exportB, themeB));
+    h('div', { class: 'mxs-tgroup mxs-right' }, surpriseB, printerBox, sliceTopB, themeB));
 
   // ───────── rail + strip + centre + right
   const rail = h('nav', { class: 'mxs-rail' });
@@ -922,7 +922,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       if (stale) outG.append(h('p', { class: 'mxs-hint mxs-amber' }, 'You changed the piece since this slice. Slice again before printing.'));
       const dl = h('button', { class: 'mxs-btn mxs-wide' }, icon('export'), canDownload || opts.save ? 'Download G-code' : 'Copy G-code');
       dl.onclick = () => { if (!result) return; if (canDownload || opts.save) void saveOut(dl, `${slug(S.design.name)}.gcode`, new TextEncoder().encode(result.gcode)); else copy(dl, result.gcode); };
-      outG.append(dl);
+      outG.append(dl, exportB);
       // send to printer
       if (S.printer?.kind === 'device' && host) {
         const p = host.printers().find((x) => x.id === S.printer!.id);
@@ -1082,8 +1082,9 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     let sel = 0, drag = false;
     const pad = 22, maxR = () => D().maxDiameter / 2;
     const box = () => { const s = Math.min((W - 2 * pad) / (maxR() * 1.15), (Hh - 2 * pad) / D().height); return { s, ox: W / 2 - 6, oy: Hh - pad }; };
-    const toPx = (p: ProfilePoint) => { const { s, ox, oy } = box(); return [ox + p.r * maxR() * s, oy - p.t * D().height * s]; };
-    const fromPx = (x: number, y: number): ProfilePoint => { const { s, ox, oy } = box(); return { r: Math.max(0.02, Math.min(1.15, (x - ox) / s / maxR())), t: Math.max(0, Math.min(1, (oy - y) / s / D().height)) }; };
+    const nk = (t: number) => 1 - D().narrowTop * t;   // points are drawn where the curve really is (after narrowing)
+    const toPx = (p: ProfilePoint) => { const { s, ox, oy } = box(); return [ox + p.r * nk(p.t) * maxR() * s, oy - p.t * D().height * s]; };
+    const fromPx = (x: number, y: number): ProfilePoint => { const { s, ox, oy } = box(); const t = Math.max(0, Math.min(1, (oy - y) / s / D().height)); return { r: Math.max(0.02, Math.min(1.15, (x - ox) / s / maxR() / Math.max(0.05, nk(t)))), t }; };
     const css = (n: string) => getComputedStyle(root).getPropertyValue(n).trim();
     const draw = () => {
       const g = c.getContext('2d')!; g.setTransform(2, 0, 0, 2, 0, 0); g.clearRect(0, 0, W, Hh);
@@ -1105,7 +1106,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       g.strokeStyle = css('--mxs-accent'); g.lineWidth = 2; g.stroke();
       D().profile.forEach((p, i) => { const [x, y] = toPx(p); g.beginPath(); g.arc(x, y, i === sel ? 5.5 : 4.5, 0, Math.PI * 2); g.fillStyle = i === sel ? css('--mxs-accent') : css('--mxs-panel'); g.fill(); g.strokeStyle = css('--mxs-accent'); g.lineWidth = 2; g.stroke(); });
       const p = D().profile[sel];
-      if (p) { const [x, y] = toPx(p); g.fillStyle = css('--mxs-text'); g.font = '600 10px system-ui'; g.fillText(`Ø ${(p.r * maxR() * 2).toFixed(1)} mm`, Math.min(W - 70, x + 8), y - 8); rIn.value = (p.r * maxR() * 2).toFixed(1); zIn.value = (p.t * D().height).toFixed(1); }
+      if (p) { const [x, y] = toPx(p); g.fillStyle = css('--mxs-text'); g.font = '600 10px system-ui'; g.fillText(`Ø ${(p.r * nk(p.t) * maxR() * 2).toFixed(1)} mm`, Math.min(W - 70, x + 8), y - 8); rIn.value = (p.r * nk(p.t) * maxR() * 2).toFixed(1); zIn.value = (p.t * D().height).toFixed(1); }
     };
     const pos = (e: PointerEvent) => { const r = c.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * Hh]; };
     c.onpointerdown = (e) => {
@@ -1116,7 +1117,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     c.onpointermove = (e) => { if (!drag) return; const [x, y] = pos(e); const np = fromPx(x, y); const pts = D().profile; const p = pts[sel]; const sorted = [...pts].sort((a, b) => a.t - b.t); const isEnd = p === sorted[0] || p === sorted[sorted.length - 1]; p.r = np.r; if (!isEnd || pts.length < 2) p.t = np.t; draw(); liveMesh(); clearTimeout(meshTimer); meshTimer = window.setTimeout(renderEstimate, 60); };
     c.onpointerup = () => { if (drag) { drag = false; changed(true); } };
     c.ondblclick = (e) => { const [x, y] = pos(e as unknown as PointerEvent); const np = fromPx(x, y); D().profile.push(np); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(np); dChange(); draw(); };
-    rIn.onchange = () => { const p = D().profile[sel]; if (p) { p.r = Math.max(0.02, +rIn.value / 2 / maxR()); dChange(); draw(); } };
+    rIn.onchange = () => { const p = D().profile[sel]; if (p) { p.r = Math.max(0.02, +rIn.value / 2 / maxR() / Math.max(0.05, nk(p.t))); dChange(); draw(); } };
     zIn.onchange = () => { const p = D().profile[sel]; if (p) { p.t = Math.max(0, Math.min(1, +zIn.value / D().height)); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(p); dChange(); draw(); } };
     const addPoint = () => { const pts = [...D().profile].sort((a, b) => a.t - b.t); let gi = 0, gap = 0; for (let i = 0; i < pts.length - 1; i++) if (pts[i + 1].t - pts[i].t > gap) { gap = pts[i + 1].t - pts[i].t; gi = i; } const t = (pts[gi].t + pts[gi + 1].t) / 2; const np = { r: profileR(D(), t), t }; D().profile.push(np); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(np); dChange(); draw(); };
     const removePoint = () => { if (D().profile.length <= 2) return; D().profile.splice(sel, 1); sel = Math.max(0, sel - 1); dChange(); draw(); };
