@@ -336,3 +336,4 @@ details.mxs-group:not(.mxs-adv):not([open]) { background: var(--mxs-soft); }
 .mxs-slicebtn.mxs-stale-dot::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--mxs-warn); }
 .mxs-slicebtn { height: 34px; padding: 0 22px; font-size: 14px; font-weight: 700; border-radius: 8px; gap: 8px; box-shadow: 0 2px 8px rgba(239,108,42,.35); }
 .mxs-slicebtn.on { box-shadow: inset 0 0 0 2px rgba(255,255,255,.55), 0 2px 8px rgba(239,108,42,.35); }
+details.mxs-group:not(.mxs-adv) > .mxs-wide, details.mxs-group:not(.mxs-adv) > .mxs-sendbox { width: auto; box-sizing: border-box; display: flex; justify-content: center; }
