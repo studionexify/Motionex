@@ -279,3 +279,41 @@
 .mxs-inl > select { min-width: 0; max-width: 46%; flex: 0 1 auto; }
 .mxs-inl > .mxs-search { flex: 1; min-width: 0; margin: 0; }
 .mxs-range input[type=number] { width: 52px; }
+
+/* ── progressive disclosure: folding sections, tips behind ⓘ */
+details.mxs-group:not(.mxs-adv) { padding: 0; }
+details.mxs-group:not(.mxs-adv) > summary { display: flex; align-items: center; gap: 6px; padding: 9px 11px; cursor: pointer; list-style: none; user-select: none; }
+details.mxs-group > summary::-webkit-details-marker { display: none; }
+details.mxs-group:not(.mxs-adv) > summary h3 { margin: 0; flex: 1; }
+details.mxs-group > summary > .mxs-ic { color: var(--mxs-muted); transition: transform .12s; }
+details.mxs-group[open] > summary > .mxs-ic:first-child { transform: rotate(90deg); }
+details.mxs-group:not(.mxs-adv)[open] { padding-bottom: 10px; }
+details.mxs-group:not(.mxs-adv) > :not(summary) { margin-left: 11px; margin-right: 11px; }
+details.mxs-group:not(.mxs-adv):not([open]) { background: var(--mxs-soft); }
+.mxs-help { border: 0; background: none; color: var(--mxs-muted); padding: 2px; border-radius: 5px; cursor: pointer; display: inline-grid; opacity: .6; }
+.mxs-help:hover { opacity: 1; background: var(--mxs-soft); }
+.mxs-group:not([open]) .mxs-help { display: none; }
+.mxs-panel .mxs-group .mxs-hint:not(.mxs-amber):not(.mxs-keep), .mxs-strip > .mxs-hint { display: none; }
+.mxs-group:not(:has(.mxs-hint:not(.mxs-keep):not(.mxs-amber))) .mxs-help { display: none; }
+.mxs-panel .mxs-group.mxs-showhelp .mxs-hint { display: block; }
+.mxs-group.mxs-showhelp .mxs-help { opacity: 1; color: var(--mxs-accent); }
+
+/* ── icon toolbars */
+.mxs-tool { display: inline-grid; place-items: center; width: 30px; height: 28px; padding: 0; }
+.mxs-vt { padding: 0; width: 32px; justify-content: center; }
+.mxs-vseg { display: inline-flex; margin: 0; padding: 2px; }
+.mxs-vseg button { width: 32px; height: 26px; flex: none; display: inline-grid; place-items: center; }
+.mxs-vsel { height: 28px; }
+.mxs-popwrap { position: relative; }
+.mxs-pop { position: absolute; bottom: 36px; right: 0; min-width: 230px; display: grid; gap: 6px; padding: 10px; background: var(--mxs-panel); border: 1px solid var(--mxs-line); border-radius: 10px; box-shadow: var(--mxs-shadow); z-index: 6; }
+.mxs-pop-h { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mxs-muted); }
+.mxs-pop .mxs-legend, .mxs-pop .mxs-vsw { border: 0; padding: 0; background: none; flex-wrap: wrap; }
+
+/* ── compact estimate badge */
+.mxs-est { width: auto; padding: 0; background: none; border: 0; box-shadow: none; }
+.mxs-est-pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--mxs-line); border-radius: 14px; background: var(--mxs-panel); color: var(--mxs-text); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; box-shadow: var(--mxs-shadow); }
+.mxs-est-pill > i { width: 7px; height: 7px; border-radius: 50%; background: var(--mxs-ok); }
+.mxs-est-pill > i.warn { background: var(--mxs-warn); }
+.mxs-est-pill .mxs-ic { color: var(--mxs-muted); }
+.mxs-est.open { width: 210px; background: var(--mxs-panel); border: 1px solid var(--mxs-line); border-radius: 10px; padding: 8px 11px 10px; box-shadow: var(--mxs-shadow); }
+.mxs-est.open .mxs-est-pill { border: 0; box-shadow: none; padding: 0; margin-bottom: 4px; background: none; }

@@ -57,6 +57,11 @@ const ICON: Record<string, string> = {
   fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5', design: 'M7 21c0-6 3-8 3-12s-2-5-2-6h8c0 1-2 2-2 6s3 6 3 12z', motion: 'M2 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0 2 3 2 3',
   slice: 'M4 7h16M4 12h16M4 17h16', plus: 'M12 5v14M5 12h14', minus: 'M5 12h14', reset: 'M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6', trash: 'M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14',
   eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', send: 'M3 11 21 3l-8 18-2-8z', pause: 'M8 5v14M16 5v14', play: 'M7 4v16l13-8z', stop: 'M6 6h12v12H6z', check: 'm5 12 5 5 9-10',
+  orbit: 'M12 3a9 4 0 1 0 0 .01M3 12a9 9 0 0 0 18 0M12 3v18', line: 'M3 9h18M3 15h18', segment: 'M4 12h16M9 9v6M15 9v6', brush: 'M18 3l3 3-9 9-3-3zM9 12l-3 3c-1 1-1 3-3 4 2 1 4 1 6-1l3-3',
+  box: 'M4 4h16v16H4z', lasso: 'M12 4c5 0 8 2.5 8 5.5S16 15 12 15s-8-2.5-8-5.5S7 4 12 4zM8 14c-1 2 0 5 3 6', band: 'M4 8h16M4 16h16M12 4v4M12 16v4', erase: 'M7 21h10M5 15l7-11 7 11-4 6H9z',
+  cube: 'M12 2 3 7v10l9 5 9-5V7zM3 7l9 5 9-5M12 12v10', beads: 'M4 9h16a3 3 0 0 1 0 6H4a3 3 0 0 1 0-6z', tubes: 'M6 7a2 2 0 1 0 0 4M6 13a2 2 0 1 0 0 4M6 7h14M6 11h14M6 13h14M6 17h14',
+  palette: 'M12 3a9 9 0 1 0 0 18c1 0 2-1 1.5-2.5S14 15 16 15h2a3 3 0 0 0 3-3c0-5-4-9-9-9zM7.5 11v.01M10 7v.01M15 7v.01', info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v6M12 7.5v.01',
+  chev: 'm9 6 6 6-6 6', clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2', weight: 'M6 8h12l2 13H4zM9 8a3 3 0 0 1 6 0',
   vase: 'M8 3h8M9 3c0 3-4 5-4 10a7 7 0 0 0 14 0c0-5-4-7-4-10', pendant: 'M12 2v5M5 17a7 7 0 0 1 14 0zM10 20h4', shade: 'M7 4h10l3 11H4zM12 15v5M8 20h8', bowl: 'M3 10h18a9 7 0 0 1-18 0zM8 21h8',
 };
 const icon = (n: string, s = 15) => { const w = document.createElement('span'); w.className = 'mxs-ic'; w.innerHTML = `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${ICON[n]}"/></svg>`; return w; };
@@ -103,8 +108,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const nameIn = h('input', { class: 'mxs-name', id: 'mxs-name', 'aria-label': 'Piece name', spellcheck: 'false' }) as HTMLInputElement;
   const undoB = h('button', { class: 'mxs-ib', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo' }, icon('undo')); undoB.onclick = undo;
   const redoB = h('button', { class: 'mxs-ib', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo' }, icon('redo')); redoB.onclick = redo;
-  const saveB = h('button', { class: 'mxs-btn' }, icon('save'), 'Save');
-  const surpriseB = h('button', { class: 'mxs-btn mxs-accent' }, icon('spark'), 'Surprise me');
+  const saveB = h('button', { class: 'mxs-ib', title: 'Save to library', 'aria-label': 'Save' }, icon('save'));
+  const surpriseB = h('button', { class: 'mxs-ib', title: 'Surprise me: a random design', 'aria-label': 'Surprise me' }, icon('spark'));
   const themeB = h('button', { class: 'mxs-ib', title: 'Light / dark', 'aria-label': 'Toggle theme' }, icon('moon'));
   const exportB = h('button', { class: 'mxs-btn mxs-accent' }, icon('export'), 'Export STL');
   const printerSel = h('select', { class: 'mxs-printer', id: 'mxs-printer', 'aria-label': 'Printer' }) as HTMLSelectElement;
@@ -388,7 +393,21 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   };
   const toggle = (get: () => boolean, set: (v: boolean) => void, after?: () => void) => { const i = h('input', { type: 'checkbox', class: 'mxs-switch' }) as HTMLInputElement; i.checked = get(); i.onchange = () => { set(i.checked); after?.(); }; return i; };
   const select = <T extends string>(opts: [T, string][], get: () => T, set: (v: T) => void, after?: () => void) => { const s = h('select', {}, ...opts.map(([v, l]) => h('option', { value: v }, l))) as HTMLSelectElement; s.value = get(); s.onchange = () => { set(s.value as T); after?.(); }; return s; };
-  const group = (title: string, ...kids: (HTMLElement | null)[]) => h('section', { class: 'mxs-group' }, h('h3', {}, title), ...kids);
+  // Progressive disclosure: every section folds; only the essentials start open; your choice is remembered.
+  const OPEN_KEY = 'motionex.open.v1';
+  const openState: Record<string, boolean> = (() => { try { return JSON.parse(localStorage.getItem(OPEN_KEY) ?? '{}'); } catch { return {}; } })();
+  const OPEN_DEFAULT = new Set(['Piece profile', 'Relief / surface', 'Edit', 'Rules', 'Selected rule', 'Change there', 'Motion zones (layer by layer)', 'Zone', 'Output', 'Printer', 'Render']);
+  const group = (title: string, ...kids: (HTMLElement | null)[]) => {
+    const key = title.split(' · ')[0];
+    const d = h('details', { class: 'mxs-group' }) as HTMLDetailsElement;
+    d.open = openState[key] ?? OPEN_DEFAULT.has(key);
+    const help = h('button', { class: 'mxs-help', title: 'Show tips', 'aria-label': 'Show tips' }, icon('info', 13));
+    help.onclick = (e) => { e.preventDefault(); e.stopPropagation(); d.classList.toggle('mxs-showhelp'); if (!d.open) d.open = true; };
+    d.append(h('summary', {}, icon('chev', 12), h('h3', {}, title), help));
+    addKids(d, ...kids);
+    d.ontoggle = () => { openState[key] = d.open; try { localStorage.setItem(OPEN_KEY, JSON.stringify(openState)); } catch { /* blocked */ } };
+    return d;
+  };
   const seg = <T extends string>(opts: [T, string][], get: () => T, set: (v: T) => void) => {
     const w = h('div', { class: 'mxs-seg' });
     for (const [v, l] of opts) { const b = h('button', { class: get() === v ? 'on' : '' }, l); b.onclick = () => { set(v); }; w.append(b); }
@@ -523,7 +542,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       N > 1 && L.inner ? innerRange(() => L, after) : null);
   }
   function motionPanel() {
-    right.append(seg([['body', 'Body (select & apply)'], ['layers', 'Layer zones']], () => S.motionTab, (v) => { S.motionTab = v; renderAll(); }));
+    right.append(seg([['body', 'Select & apply'], ['layers', 'By layer']], () => S.motionTab, (v) => { S.motionTab = v; renderAll(); }));
     if (S.motionTab === 'body') { bodyPanel(); return; }
     const H = S.design.height;
     const list = h('div', { class: 'mxs-zones' });
@@ -547,7 +566,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       if (last && last.to > z.from) last.to = z.from;
       S.zones.push(z); S.activeZone = z.id; changed(false); renderAll();
     };
-    right.append(group('Motion zones (layer by layer)', S.zones.length ? list : h('p', { class: 'mxs-hint' }, 'No motion yet. Pick one from the library on the left, or add a zone.'), h('div', { class: 'mxs-btnrow' }, add),
+    right.append(group('Motion zones (layer by layer)', S.zones.length ? list : h('p', { class: 'mxs-hint mxs-keep' }, 'No motion yet. Pick one from the library on the left, or add a zone.'), h('div', { class: 'mxs-btnrow' }, add),
       h('p', { class: 'mxs-hint' }, 'Each zone is a band of layers with its own motion. Where zones overlap, the upper one in this list wins.')));
     const z = S.zones.find((x) => x.id === S.activeZone);
     if (!z) return;
@@ -636,8 +655,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     view.canvas.style.cursor = show && S.tool !== 'orbit' ? 'crosshair' : '';
     if (!show) return;
     toolBar.innerHTML = '';
-    for (const [id, label, tip] of TOOLS) { const b = h('button', { class: `mxs-tool${S.tool === id ? ' on' : ''}`, title: tip }, label); b.onclick = () => { S.tool = id; renderTools(); }; toolBar.append(b); }
-    const er = h('button', { class: `mxs-tool${S.erase ? ' on mxs-erase' : ''}`, title: 'Take away from the selection (or hold Ctrl)' }, 'Erase'); er.onclick = () => { S.erase = !S.erase; renderTools(); };
+    for (const [id, label, tip] of TOOLS) { const b = h('button', { class: `mxs-tool${S.tool === id ? ' on' : ''}`, title: `${label}: ${tip}`, 'aria-label': label }, icon(id, 16)); b.onclick = () => { S.tool = id; renderTools(); }; toolBar.append(b); }
+    const er = h('button', { class: `mxs-tool${S.erase ? ' on mxs-erase' : ''}`, title: 'Erase: take away from the selection (or hold Ctrl)', 'aria-label': 'Erase' }, icon('erase', 16)); er.onclick = () => { S.erase = !S.erase; renderTools(); };
     toolBar.append(h('span', { class: 'mxs-tsep' }), er);
     if (S.tool === 'brush' || S.tool === 'segment') {
       const r = h('input', { type: 'range', min: '1', max: '40', step: '0.5', value: String(S.brushR), 'aria-label': 'Brush size', title: 'Brush size (mm)' }) as HTMLInputElement;
@@ -775,7 +794,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     });
     const add = h('button', { class: 'mxs-btn mxs-sm' }, icon('plus', 13), 'New rule');
     add.onclick = () => { const r = newRule(S.rules.length + 1); S.rules.push(r); S.activeRule = r.id; if (S.tool === 'orbit') S.tool = 'line'; changed(false); renderAll(); };
-    right.append(group('Rules', S.rules.length ? list : h('p', { class: 'mxs-hint' }, 'Select parts of the piece with the tools above the view, then choose what changes there. Rules lower in the list win where two set the same thing.'), h('div', { class: 'mxs-btnrow' }, add)));
+    right.append(group('Rules', S.rules.length ? list : h('p', { class: 'mxs-hint mxs-keep' }, 'Select parts of the piece with the tools above the view, then choose what changes there. Rules lower in the list win where two set the same thing.'), h('div', { class: 'mxs-btnrow' }, add)));
     const r = activeRule(); if (!r) return;
     const rc = () => { changed(false); const sm = right.querySelector('.mxs-rule.on small'); if (sm) sm.textContent = 'edited'; };
     const rp = () => { rc(); paintSoon(); };
@@ -894,7 +913,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         const c = h('button', { class: 'mxs-btn mxs-wide' }, icon('printer'), 'Connect a printer to send'); c.onclick = () => host.manage();
         outG.append(c);
       }
-    } else outG.append(h('p', { class: 'mxs-hint' }, 'Nothing is sliced yet. Shape the piece and add motions first; slicing runs only when you press Slice.'));
+    } else outG.append(h('p', { class: 'mxs-hint mxs-keep' }, 'Nothing is sliced yet. Shape the piece and add motions first; slicing runs only when you press Slice.'));
     right.append(outG);
   }
 
@@ -944,26 +963,36 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   }
 
   // ───────── estimate + view bar + layer bar
+  let estOpen = false;
   function renderEstimate() {
     const e = estimate(S.design, S.slice.lineWidth, S.slice.layerHeight, S.slice.speed);
     estCard.innerHTML = '';
+    estCard.classList.toggle('open', estOpen);
     const ok = !e.warnings.length;
     const H = S.design.height, bed = bedOfPrinter();
     const fits = e.maxDiameter <= Math.min(bed[0], bed[1]) - 4 && H <= bed[2];
-    addKids(estCard, h('div', { class: 'mxs-est-h' }, h('i', { class: ok && fits ? 'ok' : 'warn' }), result && !stale ? 'Estimate · sliced' : 'Estimate · design'),
+    const sliced = result && !stale;
+    const pill = h('button', { class: 'mxs-est-pill', title: 'Show estimate details' }, h('i', { class: ok && fits ? 'ok' : 'warn' }), icon('clock', 13), fmtTime(sliced ? result!.stats.seconds : e.seconds), icon('weight', 13), `${(sliced ? result!.stats.grams : e.grams).toFixed(0)} g`);
+    pill.onclick = () => { estOpen = !estOpen; renderEstimate(); };
+    estCard.append(pill);
+    if (!estOpen) return;
+    addKids(estCard, h('div', { class: 'mxs-est-h' }, sliced ? 'Estimate · sliced' : 'Estimate · design'),
       ...([['Height', `${H.toFixed(0)} mm`], ['Max Ø', `${e.maxDiameter.toFixed(0)} mm`], ['Time', fmtTime(result && !stale ? result.stats.seconds : e.seconds)], ['Filament', result && !stale ? `${(result.stats.filamentMm / 1000).toFixed(1)} m · ${result.stats.grams.toFixed(0)} g` : `${e.meters.toFixed(1)} m · ${e.grams.toFixed(0)} g`]] as [string, string][]).map(([k, v]) => h('div', { class: 'mxs-est-r' }, h('span', {}, k), h('b', {}, v))),
       !fits ? h('div', { class: 'mxs-est-w' }, `Does not fit the ${bed[0]}×${bed[1]}×${bed[2]} mm printer.`) : null,
       ...e.warnings.map((w) => h('div', { class: 'mxs-est-w' }, w)));
   }
+  let paletteOpen = false;
   function renderViewBar() {
     viewBar.innerHTML = '';
-    const tog = (label: string, on: boolean, fn: () => void, disabled = false) => { const b = h('button', { class: `mxs-vt${on ? ' on' : ''}`, disabled }, icon('eye', 13), label); b.onclick = fn; return b; };
+    const palette = h('div', { class: 'mxs-pop' });
+    const tog = (label: string, on: boolean, fn: () => void, disabled = false) => { const b = h('button', { class: `mxs-vt${on ? ' on' : ''}`, disabled, title: `${on ? 'Hide' : 'Show'} ${label.toLowerCase()}`, 'aria-label': label }, icon(label === 'Model' ? 'cube' : 'line', 15)); b.onclick = fn; return b; };
     viewBar.append(
       tog('Model', showModel, () => { showModel = !showModel; if (!showModel && !showToolpath) showToolpath = !!curPath(); view.setVisibility(showModel, showToolpath); renderViewBar(); renderTools(); }),
       tog(S.step === 'motion' ? 'Lines' : 'Toolpath', showToolpath, () => { showToolpath = !showToolpath; if (!showModel && !showToolpath) showModel = true; view.setVisibility(showModel, showToolpath); renderViewBar(); renderLayerBar(); renderTools(); }, !curPath()));
     if (S.step === 'slice' && result && showToolpath) {
-      const st = seg<PathStyle>([['lines', 'Lines'], ['ribbons', 'Beads'], ['tubes', 'Tubes']], () => S.pathStyle, (v) => { S.pathStyle = v; persist(); view.setStyle(v); renderViewBar(); });
-      st.classList.add('mxs-vseg'); st.title = 'Lines: fastest · Beads: real width and height of every line · Tubes: round beads for close-up (last 40 layers)';
+      const st = h('div', { class: 'mxs-seg mxs-vseg' });
+      for (const [v, ic, tip] of [['lines', 'line', 'Lines (fastest)'], ['ribbons', 'beads', 'Beads: real width and height'], ['tubes', 'tubes', 'Tubes: round beads, close-up']] as [PathStyle, string, string][]) { const b = h('button', { class: S.pathStyle === v ? 'on' : '', title: tip, 'aria-label': tip }, icon(ic, 15)); b.onclick = () => { S.pathStyle = v; persist(); view.setStyle(v); renderViewBar(); }; st.append(b); }
+      st.title = 'Lines: fastest · Beads: real width and height of every line · Tubes: round beads for close-up (last 40 layers)';
       const cb = select<ColorBy>([['feature', 'Colour: line kind'], ['width', 'Colour: real width'], ['flow', 'Colour: material vs plan'], ['speed', 'Colour: real speed'], ['sag', 'Colour: sag'], ['defects', 'Colour: defects'], ['rules', 'Colour: rules'], ['height', 'Colour: height']], () => S.colorBy, (v) => { S.colorBy = v; view.colorBy = v; persist(); view.recolour(); renderViewBar(); });
       cb.className = 'mxs-vsel';
       viewBar.append(st, cb);
@@ -975,14 +1004,20 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       if (lg) viewBar.append(h('span', { class: 'mxs-legend' }, ...lg.map(([c, t]) => h('span', {}, h('i', { style: `background:${c}` }), t))));
       if (S.colorBy === 'feature') {
         const pk = (k: keyof typeof view.pathColors, label: string) => { const i = h('input', { type: 'color', value: view.pathColors[k], title: `${label} colour`, 'aria-label': `${label} colour` }) as HTMLInputElement; i.onchange = () => { view.pathColors[k] = i.value; view.recolour(); }; return h('label', { class: 'mxs-pk' }, i, label); };
-        viewBar.append(h('span', { class: 'mxs-legend' }, pk('wall', 'Wall'), pk('motion', 'Motion'), pk('inner', 'Inner'), pk('base', 'Base')));
+        palette.append(h('div', { class: 'mxs-pop-h' }, 'Line colours'), h('div', { class: 'mxs-legend' }, pk('wall', 'Wall'), pk('motion', 'Motion'), pk('inner', 'Inner'), pk('base', 'Base')));
       }
     }
     if (showModel) {
       const sw = h('span', { class: 'mxs-vsw', title: 'Model colour' });
+      palette.append(h('div', { class: 'mxs-pop-h' }, 'Model colour'));
       for (const col of ['#ece6dc', '#f7f7f4', '#d8b48a', '#c96f4a', '#8aa58f', '#6b7fa8', '#2e3138']) { const b = h('button', { class: `mxs-sw${S.color === col ? ' on' : ''}`, style: `background:${col}`, 'aria-label': `Model colour ${col}` }); b.onclick = () => { S.color = col; persist(); view.setDesign(S.design, S.color); paintRules(); renderViewBar(); }; sw.append(b); }
       const cu = h('input', { type: 'color', value: S.color, 'aria-label': 'Custom model colour' }) as HTMLInputElement; cu.oninput = () => { S.color = cu.value; persist(); view.setDesign(S.design, S.color); paintRules(); };
-      sw.append(cu); viewBar.append(sw);
+      sw.append(cu); palette.append(sw);
+    }
+    if (palette.childElementCount) {
+      const pb = h('button', { class: `mxs-vt${paletteOpen ? ' on' : ''}`, title: 'Colours', 'aria-label': 'Colours' }, icon('palette', 15));
+      pb.onclick = () => { paletteOpen = !paletteOpen; renderViewBar(); };
+      viewBar.append(h('span', { class: 'mxs-popwrap' }, pb, paletteOpen ? palette : null));
     }
     staleTag.hidden = !(result && stale && S.step === 'slice');
     staleTag.textContent = 'Toolpath is out of date: slice again';
