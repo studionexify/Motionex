@@ -2,7 +2,7 @@
   "name": "motionex",
   "productName": "Motionex",
   "version": "0.1.0",
-  "description": "Motionex — motion G-code generator and slicer",
+  "description": "Motionex \u2014 motion G-code generator and slicer",
   "main": "electron/dist/main.cjs",
   "type": "module",
   "scripts": {
@@ -15,7 +15,11 @@
     "package:win": "npm run build && electron-builder --win --publish never && node scripts/package-win.mjs",
     "build:electron": "node scripts/build-electron.mjs",
     "hanex:prints": "cross-env HANEX_TEST_PRINTS=out/hanex vitest run tests/hanex/calibration.test.ts",
-    "desktop:win": "npm version patch --no-git-tag-version && npm run build && electron-builder --win nsis --x64"
+    "desktop:win": "npm version patch --no-git-tag-version && npm run build && electron-builder --win nsis --x64",
+    "build:bridge": "esbuild bridge/main.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist-bridge/motionex-bridge.cjs",
+    "build:web": "npm run build:bridge && vite build -c vite.web.config.ts && cp dist-bridge/motionex-bridge.cjs dist-web/motionex-bridge.cjs",
+    "dev:web": "vite -c vite.web.config.ts",
+    "bridge": "npm run build:bridge && node dist-bridge/motionex-bridge.cjs"
   },
   "build": {
     "appId": "com.motionex.app",

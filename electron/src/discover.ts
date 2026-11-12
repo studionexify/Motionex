@@ -3,7 +3,6 @@
 // - Klipper/Moonraker printers are found by probing GET /server/info on port 7125 across the local /24.
 import dgram from 'node:dgram';
 import os from 'node:os';
-import { ipcMain } from 'electron';
 
 export interface FoundPrinter {
   kind: 'bbl_lan' | 'moonraker';
@@ -79,6 +78,3 @@ export async function discoverPrinters(ms = 6000): Promise<FoundPrinter[]> {
   return [...found.values()];
 }
 
-export function registerDiscoveryIpc() {
-  ipcMain.handle('nx:dev:discover', () => discoverPrinters());
-}

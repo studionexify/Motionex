@@ -125,3 +125,11 @@ export async function uploadAndPrint(id: string, name: string, data: ArrayBuffer
     if (start) await run(id, 'Starting print…', (h) => h.startPrint(name, opts));
   } finally { setUp(null); }
 }
+
+/** Re-read the printer list (e.g. after the web app pairs with the printer bridge). */
+export async function reloadDevices() {
+  for (const h of handles.values()) await h.disconnect().catch(() => {});
+  handles.clear();
+  useDevices.setState({ loaded: false, devices: [], status: {}, busy: {}, upload: {} });
+  await initDevices();
+}

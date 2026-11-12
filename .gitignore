@@ -4,3 +4,5 @@ release/
 electron/dist/
 out/
 desktop-build/
+dist-web
+dist-bridge

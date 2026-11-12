@@ -6,7 +6,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { disconnectAll, registerDeviceIpc } from './devices';
-import { registerDiscoveryIpc } from './discover';
+import { discoverPrinters } from './discover';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { updateFromFile } from './updates';
@@ -127,7 +127,7 @@ app.whenReady().then(() => {
   });
 
   registerDeviceIpc();
-  registerDiscoveryIpc();
+  ipcMain.handle('nx:dev:discover', () => discoverPrinters());
 
   if (process.platform === 'darwin') {
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' }]));

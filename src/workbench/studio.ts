@@ -15,16 +15,37 @@ import { compensate, physicsFor, simulate, type Physics, type PrintSim } from '.
 import { stlFromDesign } from './stl';
 
 // ───────── host (printer connections; only the desktop app provides one)
-export interface PrinterLink { id: string; name: string; state: string; progress?: number; detail?: string; bed?: [number, number, number] }
+export interface PrinterLink { id: string; name: string; state: string; progress?: number; detail?: string; bed?: [number, number, number]; machine?: string; kind?: string; address?: string }
+/** The printer bridge as the studio sees it (web app only). */
+export interface BridgeLike {
+  state: 'off' | 'connecting' | 'pairing' | 'ready' | 'error'; error: string; info: { version: string; host: string } | null;
+  saved: { url: string; code: string };
+  connect(url?: string, code?: string): Promise<boolean>; disconnect(): void; onChange(cb: () => void): () => void;
+}
+/** Adding / removing printers from inside the studio (web app, through the bridge). */
+export interface PrinterSetup {
+  bridge: BridgeLike;
+  add(p: { name: string; machine: string; kind: string; host: string; serial?: string; accessCode?: string; apiKey?: string }): Promise<string>;
+  remove(id: string): Promise<void>;
+  discover(): Promise<{ kind: string; host: string; name?: string; serial?: string; model?: string }[]>;
+  reload(): Promise<void>;
+}
 export interface StudioHost {
   printers(): PrinterLink[];
   subscribe(cb: () => void): () => void;
   send(id: string, fileName: string, gcode: string, start: boolean, onProgress?: (f: number) => void): Promise<void>;
   control(id: string, action: 'pause' | 'resume' | 'cancel' | 'connect'): Promise<void>;
   manage(): void;
+  setup?: PrinterSetup;
 }
 /** save: hand a finished file to the host (e.g. the artifact viewer's downloads); rejects if the viewer declines. */
-export interface StudioOptions { host?: StudioHost; download?: boolean; save?: (name: string, data: Uint8Array) => Promise<void> }
+export interface StudioOptions {
+  host?: StudioHost; download?: boolean; save?: (name: string, data: Uint8Array) => Promise<void>;
+  /** Slice in a Web Worker (web app). */
+  worker?: () => Worker;
+  /** Larger key/value storage for the library (IndexedDB in the web app). */
+  storage?: { get<T>(k: string): Promise<T | undefined>; set(k: string, v: unknown): Promise<void> };
+}
 
 // ───────── state
 interface Saved { id: string; name: string; design: Design; zones: MotionZone[]; rules?: Rule[]; at: number }
@@ -179,7 +200,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   /** Machine that a connected printer is (matched by name), for its nozzles. */
   const KEYS: Record<string, string> = { 'bbl-a1': 'a1', 'bbl-p1s': 'p1s', 'snapmaker-u1': 'u1', 'elegoo-n4max': 'neptune' };
   const machineOfDevice = (name: string) => PRINTERS.find((m) => new RegExp(`\\b${KEYS[m.id]}\\b`, 'i').test(name)) ?? null;
-  const nozzlesOf = (kind: 'profile' | 'device', id: string, name = '') => (kind === 'profile' ? PRINTERS.find((p) => p.id === id)?.nozzles : machineOfDevice(name)?.nozzles) ?? [0.4];
+  const deviceMachine = (id: string, name = '') => { const m = host?.printers().find((p) => p.id === id)?.machine; return PRINTERS.find((x) => x.id === m) ?? machineOfDevice(name); };
+  const nozzlesOf = (kind: 'profile' | 'device', id: string, name = '') => (kind === 'profile' ? PRINTERS.find((p) => p.id === id)?.nozzles : deviceMachine(id, name)?.nozzles) ?? [0.4];
   const NZ = () => nozzleLimits(S.printer?.nozzle ?? S.slice.nozzle ?? 0.4, S.slice.printer);
   const choosePrinter = (v: string) => {
     if (!v) return;
@@ -187,7 +209,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const nozzle = +nz || 0.4;
     S.printer = { kind, id, nozzle };
     const bed = bedOfPrinter();
-    const machine = kind === 'profile' ? id : machineOfDevice(host?.printers().find((p) => p.id === id)?.name ?? '')?.id ?? S.slice.printer;
+    const machine = kind === 'profile' ? id : deviceMachine(id, host?.printers().find((p) => p.id === id)?.name ?? '')?.id ?? S.slice.printer;
     const L = nozzleLimits(nozzle, machine);
     // everything follows the nozzle: line, layer, flow, speed; the wall is at least one line
     S.slice = { ...S.slice, bedX: bed[0], bedY: bed[1], printer: machine, nozzle, lineWidth: L.lineDef, layerHeight: L.layerDef, firstLayerHeight: Math.min(L.layerMax, +(L.layerDef * 1.2).toFixed(2)), maxVolumetric: L.flow, speed: L.speedDef, firstLayerSpeed: Math.round(L.speedDef / 2) };
@@ -197,8 +219,9 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     if (S.design.relief.count > maxCount) S.design.relief.count = Math.max(1, maxCount);
     changed(true); renderAll();
   };
+  function openPrinters() { if (host?.setup) { S.rail = 'printers'; renderAll(); } else host?.manage(); }
   const printerKey = () => (S.printer ? `${S.printer.kind}:${S.printer.id}:${S.printer.nozzle}` : '');
-  printerSel.onchange = () => { if (printerSel.value === '__manage') { printerSel.value = printerKey(); host?.manage(); return; } choosePrinter(printerSel.value); };
+  printerSel.onchange = () => { if (printerSel.value === '__manage') { printerSel.value = printerKey(); openPrinters(); return; } choosePrinter(printerSel.value); };
   const renderPrinterSel = () => {
     const { devs, profiles } = printerList();
     printerSel.innerHTML = '';
@@ -225,8 +248,9 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       devs.length ? h('div', { class: 'mxs-ggrid' }, ...devs.map((d) => machineCard('device', d.id, d.name, d.state, nozzlesOf('device', d.id, d.name)))) : null,
       h('div', { class: 'mxs-glabel' }, 'My printers'),
       h('div', { class: 'mxs-ggrid' }, ...profiles.map((p) => machineCard('profile', p.id, p.name, `${p.bed[0]} × ${p.bed[1]} × ${p.bed[2]} mm`, p.nozzles))),
-      host ? (() => { const b = h('button', { class: 'mxs-btn' }, icon('printer'), 'Connect a printer (LAN, Klipper, OctoPrint, USB)…'); b.onclick = () => host.manage(); return b; })() : h('p', { class: 'mxs-muted' }, 'Connecting and sending to printers works in the Motionex desktop app.')));
+      host ? (() => { const b = h('button', { class: 'mxs-btn' }, icon('printer'), 'Connect a printer (LAN, Klipper, OctoPrint, USB)…'); b.onclick = () => openPrinters(); return b; })() : h('p', { class: 'mxs-muted' }, 'Connecting and sending to printers works in the Motionex desktop app.')));
   };
+  const offBridge = host?.setup?.bridge.onChange(() => { renderPrinterSel(); renderGate(); if (S.rail === 'printers') renderPage(); }) ?? (() => {});
   const offHost = host?.subscribe(() => { renderPrinterSel(); renderGate(); if (S.step === 'slice') renderPanel(); if (S.rail === 'printers') renderPage(); }) ?? (() => {});
 
   // ───────── change handling
@@ -271,31 +295,55 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     view.setVisibility(showModel, showToolpath);
   }
 
+  let sliceWorker: Worker | null = null, sliceSeq = 0;
+  const showSlice = (r: GenResult, sm: PrintSim) => {
+    result = r; sim = sm;
+    stale = false; showToolpath = true;
+    view.maxLayer = Infinity; view.flip = S.slice.flip; view.style = S.pathStyle; view.colorBy = S.colorBy; view.ruleColors = S.rules.map((x) => x.color);
+    view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); pathStep = 'slice';
+    view.setVisibility(showModel = false, true);
+    renderAll();
+  };
   const doSlice = () => {
     staleTag.textContent = 'Slicing…'; staleTag.hidden = false;
+    if (opts.worker) {
+      const seq = ++sliceSeq;
+      sliceWorker ??= opts.worker();
+      sliceWorker.onmessage = (e) => {
+        if (seq !== sliceSeq) return;
+        if (e.data.ok) showSlice(e.data.result, e.data.sim); else { staleTag.textContent = `Slicing failed: ${e.data.error}`; }
+      };
+      sliceWorker.postMessage(JSON.parse(JSON.stringify({ design: S.design, slice: S.slice, zones: S.zones, rules: S.rules, physics: S.physics })));
+      return;
+    }
     setTimeout(() => {
-      result = slice(S.design, S.slice, S.zones, brushOf, S.rules);
-      sim = S.slice.evenFlow !== false || S.slice.evenThin !== false ? compensate(result, S.slice, S.physics) : simulate(result, S.slice, S.physics);
-      stale = false; showToolpath = true;
-      view.maxLayer = Infinity; view.flip = S.slice.flip; view.style = S.pathStyle; view.colorBy = S.colorBy; view.ruleColors = S.rules.map((r) => r.color);
-      view.setToolpath(result, [S.slice.bedX, S.slice.bedY], sim); pathStep = 'slice';
-      view.setVisibility(showModel = false, true);
-      renderAll();
+      const r = slice(S.design, S.slice, S.zones, brushOf, S.rules);
+      showSlice(r, S.slice.evenFlow !== false || S.slice.evenThin !== false ? compensate(r, S.slice, S.physics) : simulate(r, S.slice, S.physics));
     }, 20);
   };
+
 
   async function saveOut(b: HTMLButtonElement, name: string, data: Uint8Array) {
     if (opts.save) { try { await opts.save(name, data); flash(b, 'Saved'); } catch (e) { const c = (e as { code?: string })?.code; flash(b, c === 'declined' ? 'Not saved' : 'Saving is not available here'); } return; }
     if (!canDownload) { flash(b, 'Downloads are blocked here'); return; }
     download(name, new Blob([data as BlobPart]));
   }
+  // library: IndexedDB in the web app (room for image reliefs), localStorage otherwise
+  let libCache: Saved[] | null = null;
+  const libGet = async (): Promise<Saved[]> => {
+    if (libCache) return libCache;
+    if (opts.storage) { let l = await opts.storage.get<Saved[]>(LIB); if (!l) { l = lsArr<Saved>(LIB); if (l.length) await opts.storage.set(LIB, l); } libCache = l; }
+    else libCache = lsArr<Saved>(LIB);
+    return libCache;
+  };
+  const libSet = async (l: Saved[]) => { libCache = l; if (opts.storage) await opts.storage.set(LIB, l); else ls.set(LIB, l); };
   // ───────── top bar behaviour
-  saveB.onclick = () => {
-    const lib = lsArr<Saved>(LIB);
+  saveB.onclick = async () => {
+    const lib = await libGet();
     const id = (S.design as Design & { _id?: string })._id ?? Math.random().toString(36).slice(2, 10);
     (S.design as Design & { _id?: string })._id = id;
     const entry: Saved = { id, name: S.design.name, design: structuredClone(S.design), zones: structuredClone(S.zones), rules: structuredClone(S.rules), at: Date.now() };
-    ls.set(LIB, [entry, ...lib.filter((x) => x.id !== id)].slice(0, 60));
+    await libSet([entry, ...lib.filter((x) => x.id !== id)].slice(0, opts.storage ? 500 : 60));
     flash(saveB, 'Saved');
   };
   surpriseB.onclick = () => { const name = S.design.name; S.design = surprise(S.design.family); S.design.name = name; changed(true); renderAll(); };
@@ -953,45 +1001,113 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         const up = h('button', { class: 'mxs-btn mxs-wide', disabled: !p }, 'Upload only'); up.onclick = send(false);
         outG.append(h('div', { class: 'mxs-sendbox' }, h('b', {}, p ? `${p.name} · ${p.state}${p.progress != null && p.state === 'printing' ? ` ${Math.round(p.progress * 100)}%` : ''}` : 'Printer not found'), sp, up, prog));
       } else if (host) {
-        const c = h('button', { class: 'mxs-btn mxs-wide' }, icon('printer'), 'Connect a printer to send'); c.onclick = () => host.manage();
+        const c = h('button', { class: 'mxs-btn mxs-wide' }, icon('printer'), 'Connect a printer to send'); c.onclick = () => openPrinters();
         outG.append(c);
       }
     } else outG.append(h('p', { class: 'mxs-hint mxs-keep' }, 'Nothing is sliced yet. Shape the piece and add motions first; slicing runs only when you press Slice.'));
     right.append(outG);
   }
 
+  function addPrinterForm(setup: PrinterSetup) {
+    const f = { name: '', machine: PRINTERS[0].id, kind: 'bbl_lan', host: '', serial: '', accessCode: '', apiKey: '' };
+    const kindFor = (m: string) => (m.startsWith('bbl-') ? 'bbl_lan' : 'moonraker');
+    const box = h('section', { class: 'mxs-bridge' });
+    const fields = h('div', { class: 'mxs-addform' });
+    const status = h('p', { class: 'mxs-muted' });
+    const input = (key: keyof typeof f, label: string, ph = '', type = 'text') => { const i = h('input', { type, value: f[key], placeholder: ph, 'aria-label': label, spellcheck: 'false' }) as HTMLInputElement; i.oninput = () => (f[key] = i.value); return h('label', { class: 'mxs-field' }, h('span', {}, label), i); };
+    const draw = () => {
+      fields.innerHTML = '';
+      const mSel = select<string>(PRINTERS.map((m) => [m.id, m.name] as [string, string]), () => f.machine, (v) => { f.machine = v; f.kind = kindFor(v); }, draw);
+      const kSel = select<string>([['bbl_lan', 'Bambu LAN (access code)'], ['moonraker', 'Klipper / Moonraker'], ['octoprint', 'OctoPrint']], () => f.kind, (v) => (f.kind = v), draw);
+      fields.append(h('label', { class: 'mxs-field' }, h('span', {}, 'Machine'), mSel), h('label', { class: 'mxs-field' }, h('span', {}, 'Connection'), kSel), input('name', 'Name', PRINTERS.find((m) => m.id === f.machine)!.name), input('host', 'IP address', '192.168.1.50'));
+      if (f.kind === 'bbl_lan') fields.append(input('serial', 'Serial number', 'from the printer: Settings → Device'), input('accessCode', 'Access code', 'Settings → LAN only / WLAN', 'password'));
+      if (f.kind === 'octoprint') fields.append(input('apiKey', 'API key', 'OctoPrint → Settings → Application keys', 'password'));
+    };
+    draw();
+    const find = h('button', { class: 'mxs-btn' }, 'Find printers on the network');
+    const found = h('div', { class: 'mxs-found' });
+    find.onclick = async () => {
+      find.textContent = 'Searching (about 6 s)…'; found.innerHTML = '';
+      try {
+        const list = await setup.discover();
+        if (!list.length) found.append(h('p', { class: 'mxs-muted' }, 'Nothing found. Enter the IP address yourself.'));
+        for (const x of list) { const b = h('button', { class: 'mxs-btn mxs-sm' }, `${x.name ?? x.host} · ${x.host}`); b.onclick = () => { f.host = x.host; f.kind = x.kind; if (x.serial) f.serial = x.serial; if (x.name) f.name = x.name; if (x.kind === 'moonraker' && f.machine.startsWith('bbl-')) f.machine = 'elegoo-n4max'; draw(); }; found.append(b); }
+      } catch (e) { found.append(h('p', { class: 'mxs-warn' }, String((e as Error).message))); }
+      find.textContent = 'Find printers on the network';
+    };
+    const add = h('button', { class: 'mxs-btn mxs-accent' }, icon('plus', 13), 'Add printer');
+    add.onclick = async () => {
+      if (!f.host) { status.textContent = 'Enter the printer’s IP address.'; return; }
+      if (f.kind === 'bbl_lan' && (!f.serial || !f.accessCode)) { status.textContent = 'Bambu printers need the serial number and access code.'; return; }
+      status.textContent = 'Adding and connecting…';
+      try { await setup.add({ ...f, name: f.name || PRINTERS.find((m) => m.id === f.machine)!.name }); renderPage(); } catch (e) { status.textContent = String((e as Error).message); }
+    };
+    box.append(h('div', { class: 'mxs-bridge-h' }, icon('plus', 15), h('b', {}, 'Add a printer')), h('div', { class: 'mxs-btnrow' }, find), found, fields, h('div', { class: 'mxs-btnrow' }, add), status);
+    return box;
+  }
   // ───────── pages (library / printers / help) replace the stage
   function renderPage() {
     page.innerHTML = '';
     if (S.rail === 'library') {
-      const lib = lsArr<Saved>(LIB);
+      void libGet().then((lib) => { if (S.rail !== 'library') return; page.innerHTML = '';
       const grid = h('div', { class: 'mxs-cards' });
       for (const f of FAMILIES) { const b = h('button', { class: 'mxs-card mxs-new' }, icon(f.id, 26), h('b', {}, `New ${f.name.toLowerCase()}`)); b.onclick = () => { S.design = defaultDesign(f.id); S.zones = []; S.rules = []; S.rail = 'studio'; S.step = 'design'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); }; grid.append(b); }
       for (const p of lib) {
         const c = h('canvas', { width: '120', height: '90' }) as HTMLCanvasElement; drawOutline(c, p.design.profile);
         const open = h('button', { class: 'mxs-btn mxs-sm' }, 'Open'); open.onclick = () => { S.design = structuredClone(p.design); S.zones = structuredClone(p.zones); S.rules = structuredClone(p.rules ?? []); S.activeRule = S.rules[0]?.id ?? null; S.activeZone = S.zones[0]?.id ?? null; S.rail = 'studio'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); };
-        const del = h('button', { class: 'mxs-btn mxs-sm' }, 'Delete'); del.onclick = () => { ls.set(LIB, lsArr<Saved>(LIB).filter((x) => x.id !== p.id)); renderPage(); };
+        const del = h('button', { class: 'mxs-btn mxs-sm' }, 'Delete'); del.onclick = async () => { await libSet((await libGet()).filter((x) => x.id !== p.id)); renderPage(); };
         grid.append(h('div', { class: 'mxs-card' }, c, h('b', {}, p.name), h('small', {}, `${p.design.family} · ${new Date(p.at).toLocaleDateString()}`), h('div', { class: 'mxs-btnrow' }, open, del)));
       }
-      page.append(h('h2', {}, 'Library'), h('p', { class: 'mxs-hint' }, 'Pieces are saved in this browser.'), grid);
+      page.append(h('h2', {}, 'Library'), h('p', { class: 'mxs-hint' }, 'Pieces are saved in this browser, on this computer.'), grid);
+      });
     } else if (S.rail === 'printers') {
       page.append(h('h2', {}, 'Printers'));
-      if (!host) { page.append(h('p', { class: 'mxs-hint' }, 'Connecting, sending and controlling printers works in the Motionex desktop app (Bambu Lab LAN, Klipper/Moonraker, OctoPrint/PrusaLink and USB).')); return; }
+      if (!host) { page.append(h('p', { class: 'mxs-hint' }, 'Connecting, sending and controlling printers works in the Motionex desktop app and the Motionex web app with the printer bridge.')); return; }
+      const setup = host.setup;
+      // bridge (web app)
+      if (setup) {
+        const br = setup.bridge;
+        const card = h('section', { class: 'mxs-bridge' });
+        const dot = { ready: 'ok', connecting: 'busy', pairing: 'warn', error: 'err', off: 'warn' }[br.state];
+        card.append(h('div', { class: 'mxs-bridge-h' }, h('i', { class: `mxs-sdot ${dot}` }), h('b', {}, 'Printer bridge'),
+          h('small', {}, br.state === 'ready' ? `connected to ${br.info?.host ?? 'this computer'} · v${br.info?.version ?? ''}` : br.state === 'connecting' ? 'connecting…' : 'not connected')));
+        if (br.state !== 'ready') {
+          const url = h('input', { type: 'text', value: br.saved.url, 'aria-label': 'Bridge address', spellcheck: 'false' }) as HTMLInputElement;
+          const code = h('input', { type: 'text', value: br.saved.code, placeholder: '6-digit code', inputmode: 'numeric', 'aria-label': 'Pairing code' }) as HTMLInputElement;
+          const go = h('button', { class: 'mxs-btn mxs-accent' }, 'Connect');
+          go.onclick = async () => { go.textContent = 'Connecting…'; if (await br.connect(url.value.trim(), code.value.trim())) await setup.reload(); renderPage(); };
+          addKids(card,
+            h('ol', { class: 'mxs-steps-list' },
+              h('li', {}, 'Download the bridge: ', (() => { const a = h('a', { href: 'motionex-bridge.cjs', download: 'motionex-bridge.cjs' }, 'motionex-bridge.cjs'); return a; })(), ' (needs ', h('a', { href: 'https://nodejs.org', target: '_blank', rel: 'noopener' }, 'Node.js 18 or newer'), ').'),
+              h('li', {}, 'On a computer on the same network as your printers, run ', h('code', {}, 'node motionex-bridge.cjs'), ' and keep that window open.'),
+              h('li', {}, 'Type the pairing code it shows here, then Connect. If the browser asks to allow access to devices on your local network, allow it.')),
+            h('div', { class: 'mxs-inl mxs-bridge-form' }, h('label', {}, 'Address'), url, h('label', {}, 'Code'), code, go),
+            br.error ? h('p', { class: 'mxs-warn' }, br.error) : null);
+        } else {
+          const off = h('button', { class: 'mxs-btn mxs-sm' }, 'Disconnect'); off.onclick = () => { br.disconnect(); renderPage(); };
+          card.append(h('div', { class: 'mxs-btnrow' }, off));
+        }
+        page.append(card);
+      }
       const ps = host.printers();
       const grid = h('div', { class: 'mxs-cards' });
       for (const p of ps) {
         const ctl = (a: 'pause' | 'resume' | 'cancel' | 'connect', ic: string, label: string) => { const b = h('button', { class: 'mxs-btn mxs-sm' }, icon(ic, 13), label); b.onclick = () => void host.control(p.id, a).catch(() => {}); return b; };
+        const mach = PRINTERS.find((m) => m.id === p.machine);
         grid.append(h('div', { class: `mxs-card mxs-pcard${S.printer?.id === p.id ? ' on' : ''}` }, icon('printer', 22), h('b', {}, p.name),
+          h('small', {}, `${mach?.name ?? ''}${p.address ? ` · ${p.address}` : ''}`),
           h('small', {}, `${p.state}${p.progress != null && p.state === 'printing' ? ` · ${Math.round(p.progress * 100)}%` : ''}${p.detail ? ` · ${p.detail}` : ''}`),
           h('div', { class: 'mxs-btnrow' },
             p.state === 'offline' ? ctl('connect', 'play', 'Connect') : null,
             p.state === 'printing' ? ctl('pause', 'pause', 'Pause') : null,
             p.state === 'paused' ? ctl('resume', 'play', 'Resume') : null,
             p.state === 'printing' || p.state === 'paused' ? ctl('cancel', 'stop', 'Stop') : null,
-            (() => { const b = h('button', { class: 'mxs-btn mxs-sm' }, 'Use'); b.onclick = () => { choosePrinter(`device:${p.id}`); }; return b; })())));
+            ...nozzlesOf('device', p.id, p.name).map((n) => { const b = h('button', { class: 'mxs-btn mxs-sm' }, `Use · ${n} mm`); b.onclick = () => { choosePrinter(`device:${p.id}:${n}`); S.rail = 'studio'; renderAll(); }; return b; }),
+            setup ? (() => { const b = h('button', { class: 'mxs-btn mxs-sm', title: 'Remove this printer' }, icon('trash', 13)); b.onclick = async () => { if (confirm(`Remove ${p.name}?`)) { await setup.remove(p.id); renderPage(); } }; return b; })() : null)));
       }
-      const m = h('button', { class: 'mxs-btn' }, icon('plus', 13), 'Add or manage printers…'); m.onclick = () => host.manage();
-      page.append(ps.length ? grid : h('p', { class: 'mxs-hint' }, 'No printers yet.'), m);
+      page.append(ps.length ? grid : h('p', { class: 'mxs-hint' }, setup && setup.bridge.state !== 'ready' ? 'Connect the bridge to see and add printers.' : 'No printers yet.'));
+      if (setup && setup.bridge.state === 'ready') page.append(addPrinterForm(setup));
+      else if (!setup) { const m = h('button', { class: 'mxs-btn' }, icon('plus', 13), 'Add or manage printers…'); m.onclick = () => host.manage(); page.append(m); }
     } else if (S.rail === 'help') {
       const qa: [string, string][] = [
         ['How does Motionex work?', 'Pick your printer, shape a piece in Design, add motions to bands of layers in Motion, then press Slice. The G-code is written only when you slice.'],
@@ -1146,7 +1262,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   view.setTheme(root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches));
   view.setDesign(S.design, S.color);
   renderAll();
-  return () => { document.removeEventListener('mousedown', closeSettings); offHost(); window.removeEventListener('keydown', onKey); view.dispose(); root.innerHTML = ''; root.classList.remove('mxs'); };
+  return () => { document.removeEventListener('mousedown', closeSettings); offBridge(); sliceWorker?.terminate(); offHost(); window.removeEventListener('keydown', onKey); view.dispose(); root.innerHTML = ''; root.classList.remove('mxs'); };
 }
 
 // ───────── helpers
