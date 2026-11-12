@@ -30,6 +30,8 @@ export interface SliceSettings {
   nozzleTemp: number; bedTemp: number; fan: number; retract: number;
   startGcode: string; endGcode: string;
   printer: string;
+  /** Nozzle diameter, mm. */
+  nozzle?: number;
   /** Trim / add extrusion per move so slow-downs at corners don't leave blobs (uses the print physics). */
   evenFlow?: boolean;
   /** Push extra extrusion where pressure has not built up yet (after travels, speed-ups) so lines don't print thin. */
@@ -39,28 +41,38 @@ export interface SliceSettings {
 }
 
 export const DEFAULT_SLICE: SliceSettings = {
-  layerHeight: 0.24, firstLayerHeight: 0.28, lineWidth: 0.5, baseLayers: 4, topLayers: 0, innerWalls: 0, spiral: false, flip: false,
+  layerHeight: 0.2, firstLayerHeight: 0.24, lineWidth: 0.45, baseLayers: 4, topLayers: 0, innerWalls: 0, spiral: false, flip: false,
   speed: 40, firstLayerSpeed: 20, travelSpeed: 150, maxVolumetric: 12,
   bedX: 256, bedY: 256, filamentDia: 1.75, flowRatio: 0.98, nozzleTemp: 220, bedTemp: 60, fan: 80, retract: 0.8,
   startGcode: 'G28 ; home\nG90\nM83 ; relative extrusion\nG1 Z5 F3000\nG92 E0',
   endGcode: 'G91\nG1 Z10 F600\nG90\nG1 X10 Y{bedY_minus10} F6000\nM104 S0\nM140 S0\nM106 S0\nM84',
-  printer: 'generic-256', evenFlow: true, evenThin: true,
+  printer: 'bbl-a1', nozzle: 0.4, evenFlow: true, evenThin: true,
 };
 
-export const PRINTERS: { id: string; name: string; bed: [number, number, number] }[] = [
-  { id: 'generic-256', name: 'Generic 256 mm', bed: [256, 256, 256] },
-  { id: 'bbl-a1', name: 'Bambu Lab A1', bed: [256, 256, 256] },
-  { id: 'bbl-a1mini', name: 'Bambu Lab A1 mini', bed: [180, 180, 180] },
-  { id: 'bbl-p1s', name: 'Bambu Lab P1S / X1C', bed: [256, 256, 250] },
-  { id: 'bbl-h2d', name: 'Bambu Lab H2D', bed: [350, 320, 325] },
-  { id: 'ender3v3', name: 'Creality Ender-3 V3', bed: [220, 220, 240] },
-  { id: 'k1max', name: 'Creality K1 Max', bed: [300, 300, 300] },
-  { id: 'k2plus', name: 'Creality K2 Plus', bed: [350, 350, 350] },
-  { id: 'mk4', name: 'Prusa MK4', bed: [250, 210, 220] },
-  { id: 'coreone', name: 'Prusa CORE One', bed: [250, 220, 270] },
-  { id: 'neptune4pro', name: 'Elegoo Neptune 4 Pro', bed: [230, 230, 265] },
-  { id: 'kobra3', name: 'Anycubic Kobra 3', bed: [255, 255, 260] },
+/** Your machines and the nozzles fitted to them. Everything else (line, layer, flow, detail limits) follows. */
+export const PRINTERS: { id: string; name: string; bed: [number, number, number]; nozzles: number[] }[] = [
+  { id: 'bbl-a1', name: 'Bambu Lab A1 combo', bed: [256, 256, 256], nozzles: [0.4] },
+  { id: 'bbl-p1s', name: 'Bambu Lab P1S combo', bed: [256, 256, 250], nozzles: [0.4] },
+  { id: 'snapmaker-u1', name: 'Snapmaker U1', bed: [270, 270, 270], nozzles: [0.4] },
+  { id: 'elegoo-n4max', name: 'Elegoo Neptune 4 Max', bed: [420, 420, 480], nozzles: [0.4, 1.0] },
 ];
+
+/** What a nozzle can physically lay down. A bead can't be much wider than ~2× the nozzle or narrower than
+ *  ~0.6×, layers stay within 20–75 % of the nozzle, and no detail (motion wave, relief cell) can be finer
+ *  than about 2.5 line widths. */
+export interface NozzleLimits { d: number; lineMin: number; lineMax: number; lineDef: number; layerMin: number; layerMax: number; layerDef: number; beadMin: number; beadMax: number; minFeature: number; flow: number; speedDef: number }
+export function nozzleLimits(d: number, printer = ''): NozzleLimits {
+  const big = d >= 0.8;
+  const hotend: Record<string, number> = { 'bbl-a1': 21, 'bbl-p1s': 21, 'snapmaker-u1': 20, 'elegoo-n4max': big ? 32 : 18 };
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+  return {
+    d, lineMin: r2(d * 0.85), lineMax: r2(d * 1.6), lineDef: r2(d * (big ? 1.1 : 1.125)),
+    layerMin: r2(d * 0.2), layerMax: r2(d * 0.75), layerDef: r2(d * (big ? 0.5 : 0.5)),
+    beadMin: r2(d * 0.6), beadMax: r2(d * 2), minFeature: r2(d * 1.125 * 2.5),
+    flow: hotend[printer] ?? (big ? 30 : 18), speedDef: big ? 25 : 40,
+  };
+}
+
 
 /** Lines per layer for the design's wall thickness. */
 export const wallLines = (d: Design, s: SliceSettings) => Math.max(1, Math.round(d.wall / Math.max(0.1, s.lineWidth)));
@@ -93,7 +105,12 @@ function inset(pts: [number, number][], d: number): [number, number][] {
   return pts.map(([x, y]) => { const r = Math.hypot(x, y) || 1; const k = Math.max(0, (r - d) / r); return [x * k, y * k]; });
 }
 
-export function slice(design: Design, s: SliceSettings, zones: MotionZone[], brushes: (id: string) => MotionBrush | undefined, rules: Rule[] = []): GenResult {
+export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], brushes: (id: string) => MotionBrush | undefined, rules: Rule[] = []): GenResult {
+  // Keep every setting within what the nozzle can print (a 1 mm nozzle cannot lay a 5 mm bead).
+  const NZ = nozzleLimits(s0.nozzle ?? 0.4, s0.printer);
+  const clampN = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+  const s: SliceSettings = { ...s0, lineWidth: clampN(s0.lineWidth, NZ.lineMin, NZ.lineMax), layerHeight: clampN(s0.layerHeight, NZ.layerMin, NZ.layerMax), firstLayerHeight: clampN(s0.firstLayerHeight, NZ.layerMin, NZ.layerMax) };
+  let beadClamped = 0, periodClamped = false;
   const out: string[] = [], segs: Seg[] = [], layerStart: number[] = [], layerZ: number[] = [], warnings: string[] = [];
   const surfRaw = makeSurface(design);
   const H = design.height;
@@ -115,7 +132,10 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     segs.push({ gl: r ? ugl : undefined, x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind: 'travel', speed: s.travelSpeed, flow: 0, h: 0, w: 0, e: 0, ret: r, layer: curLayer, ruled: false, rule: -1 });
     secs += d / s.travelSpeed; x = nx; y = ny; z = nz;
   };
-  const extrude = (nx: number, ny: number, nz: number, h: number, w: number, speed: number, flow: number, kind: Seg['kind']) => {
+  const extrude = (nx: number, ny: number, nz: number, h: number, w: number, speed: number, flow0: number, kind: Seg['kind']) => {
+    const bead = w * flow0 * s.flowRatio;
+    const flow = bead > NZ.beadMax ? NZ.beadMax / (w * s.flowRatio) : bead < NZ.beadMin && flow0 > 0.05 ? NZ.beadMin / (w * s.flowRatio) : flow0;
+    if (flow !== flow0) beadClamped++;
     const d = Math.hypot(nx - x, ny - y, nz - z);
     if (d < 1e-4) return;
     const sp = Math.min(speed, volCap(h, w * flow));
@@ -217,7 +237,8 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
     const zone = active.find((zn) => t >= zn.from - 1e-9 && t <= zn.to + 1e-9) ?? null;
     const brush = zone ? brushes(zone.brushId)! : null;
     const amp = brush ? brush.amplitude * zone!.size : 0, zamp = brush ? (brush.z_amplitude ?? 0) * zone!.size : 0;
-    const period = brush ? Math.max(0.2, brush.period_mm * zone!.spacing) : 1;
+    const period = brush ? Math.max(NZ.minFeature, brush.period_mm * zone!.spacing) : 1;
+    if (brush && brush.period_mm * zone!.spacing < NZ.minFeature) periodClamped = true;
     const approxR = profileR(design, s.flip ? 1 - t : t) * design.maxDiameter / 2;
     const n = Math.max(120, Math.ceil((TAU * approxR) / res));
     const loops: [number, number][][] = [];
@@ -277,7 +298,7 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
           if (q.mr && q.mw > 0) {
             const rb = brushes(q.mr.brushId!);
             if (rb) {
-              const rp = Math.max(0.2, rb.period_mm * q.mr.spacing);
+              const rp = Math.max(NZ.minFeature, rb.period_mm * q.mr.spacing); if (rb.period_mm * q.mr.spacing < NZ.minFeature) periodClamped = true;
               const rr = Math.max(1, Math.round(L / rp));
               const eff = q.mr.useBrushLayers ? rb.layers ?? null : q.mr.layers;
               const lp = effectPhase(eff, li);
@@ -323,6 +344,10 @@ export function slice(design: Design, s: SliceSettings, zones: MotionZone[], bru
   }
   emit(`; filament used: ${(eTot / 1000).toFixed(3)} m`);
   for (const l of s.endGcode.replace('{bedY_minus10}', String(s.bedY - 10)).split('\n')) emit(l);
+  if (beadClamped) warnings.push(`${beadClamped} moves asked for a bead the ${NZ.d} mm nozzle can't lay (${NZ.beadMin}–${NZ.beadMax} mm wide); they were limited.`);
+  if (periodClamped) warnings.push(`A motion repeats faster than the ${NZ.d} mm nozzle can draw; it was stretched to at least ${NZ.minFeature} mm per wave.`);
+  if (design.relief.kind !== 'smooth' && design.relief.depth !== 0 && (Math.PI * design.maxDiameter) / Math.max(1, design.relief.count) < NZ.minFeature * 1.5) warnings.push(`The relief is finer than the ${NZ.d} mm nozzle can show: use a lower count.`);
+  if (s0.lineWidth !== s.lineWidth || s0.layerHeight !== s.layerHeight) warnings.push(`Line width / layer height were kept within the ${NZ.d} mm nozzle's range.`);
   if (!segs.length) warnings.push('Nothing to print: the layer height is taller than the piece.');
   return { gcode: out.join('\n') + '\n', segs, layers: nLayers, layerStart, layerZ, warnings,
     stats: { lengthMm: len, filamentMm: eTot, grams: (eTot * fa) / 1000 * 1.24, seconds: secs, lines: out.length, maxOffset: maxOff } };

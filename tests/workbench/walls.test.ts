@@ -29,7 +29,7 @@ describe('thick walls', () => {
 describe('wall line layout', () => {
   it('outer lines carry the full relief, inner lines stay on the smooth inner face', () => {
     const d = { ...base(), wall: 2.5, relief: { kind: 'ribbed', count: 12, depth: 1.2, start: 0, end: 1, transition: 0.001 } };
-    const r = slice(d, { ...DEFAULT_SLICE, baseLayers: 0, spiral: false }, [], brush);
+    const r = slice(d, { ...DEFAULT_SLICE, baseLayers: 0, spiral: false, lineWidth: 0.5 }, [], brush);
     const L = 10, segs = r.segs.slice(r.layerStart[L], r.layerStart[L + 1]).filter((g) => g.kind !== 'travel');
     const rad = (g: { x: number; y: number }) => Math.hypot(g.x - 128, g.y - 128);
     const outer = segs.filter((g) => g.kind === 'wall'), inner = segs.filter((g) => g.kind === 'inner');
@@ -37,5 +37,18 @@ describe('wall line layout', () => {
     expect(spread(outer.map(rad))).toBeGreaterThan(1.1);
     const innermost = inner.slice(0, Math.floor(inner.length / 4));   // first printed = innermost line
     expect(spread(innermost.map(rad))).toBeLessThan(0.05);
+  });
+});
+
+describe('nozzle limits', () => {
+  it('a 1 mm nozzle never gets a bead wider than 2 mm, and settings stay in range', async () => {
+    const { nozzleLimits } = await import('../../src/workbench/generator');
+    const L = nozzleLimits(1.0, 'elegoo-n4max');
+    expect(L.beadMax).toBe(2); expect(L.layerMax).toBe(0.75);
+    const z = newZone('preset-beads', 0, 1); z.fade = 0; z.size = 4;
+    const s = { ...DEFAULT_SLICE, nozzle: 1.0, printer: 'elegoo-n4max', lineWidth: 5, layerHeight: 2, firstLayerHeight: 2 };
+    const r = slice(base(), s, [z], brush);
+    for (const g of r.segs) if (g.kind !== 'travel') { expect(g.w).toBeLessThanOrEqual(2.0001); expect(g.h).toBeLessThanOrEqual(0.75001); }
+    expect(r.warnings.join(' ')).toMatch(/nozzle/);
   });
 });

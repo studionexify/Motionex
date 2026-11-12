@@ -8,7 +8,7 @@ import { effectPhase } from '../plugins/motionex/modifier';
 import { ALL_RELIEFS, defaultDesign, estimate, makeSurface, FAMILIES, NOISE_RELIEFS, OUTLINES, profileR, relief as reliefAt, RELIEFS, SECTIONS, surprise, type Design, type Family, type ProfilePoint } from './design';
 import { heightBytes, type HeightMap } from './reliefs';
 import { fileToMap, textToMap } from './relief-import';
-import { DEFAULT_SLICE, wallLines, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
+import { DEFAULT_SLICE, nozzleLimits, wallLines, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
 import { compensate, physicsFor, simulate, type Physics, type PrintSim } from './physics';
@@ -35,7 +35,7 @@ interface State {
   design: Design; zones: MotionZone[]; activeZone: string | null; slice: SliceSettings;
   motionTab: 'body' | 'layers'; rules: Rule[]; activeRule: string | null; tool: Tool; brushR: number; erase: boolean;
   physics: Physics; pathStyle: PathStyle; colorBy: ColorBy; libOpen: Record<string, boolean>;
-  printer: { kind: 'profile' | 'device'; id: string } | null;
+  printer: { kind: 'profile' | 'device'; id: string; nozzle: number } | null;
   color: string; theme: 'light' | 'dark' | null;
   rail: 'studio' | 'library' | 'printers' | 'help';
 }
@@ -90,6 +90,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     physics: { ...physicsFor(saved.slice?.printer ?? DEFAULT_SLICE.printer), ...saved.physics }, pathStyle: saved.pathStyle ?? 'ribbons', colorBy: saved.colorBy ?? 'feature', libOpen: saved.libOpen ?? {},
   };
   S.activeRule = S.rules[0]?.id ?? null;
+  // machine + nozzle must be known (and one of yours) before anything else
+  if (S.printer && (!S.printer.nozzle || (S.printer.kind === 'profile' && !PRINTERS.some((p) => p.id === S.printer!.id && p.nozzles.includes(S.printer!.nozzle))))) S.printer = null;
   S.activeZone = S.zones[0]?.id ?? null;
   let result: GenResult | null = null, sim: PrintSim | null = null, stale = true, showModel = true, showToolpath = false;
   const brushOf = (id: string): MotionBrush | undefined => PRESETS.find((b) => b.id === id);
@@ -174,24 +176,37 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     if (S.printer.kind === 'profile') return PRINTERS.find((p) => p.id === S.printer!.id)?.bed ?? [256, 256, 256];
     return host?.printers().find((p) => p.id === S.printer!.id)?.bed ?? [256, 256, 256];
   };
+  /** Machine that a connected printer is (matched by name), for its nozzles. */
+  const KEYS: Record<string, string> = { 'bbl-a1': 'a1', 'bbl-p1s': 'p1s', 'snapmaker-u1': 'u1', 'elegoo-n4max': 'neptune' };
+  const machineOfDevice = (name: string) => PRINTERS.find((m) => new RegExp(`\\b${KEYS[m.id]}\\b`, 'i').test(name)) ?? null;
+  const nozzlesOf = (kind: 'profile' | 'device', id: string, name = '') => (kind === 'profile' ? PRINTERS.find((p) => p.id === id)?.nozzles : machineOfDevice(name)?.nozzles) ?? [0.4];
+  const NZ = () => nozzleLimits(S.printer?.nozzle ?? S.slice.nozzle ?? 0.4, S.slice.printer);
   const choosePrinter = (v: string) => {
     if (!v) return;
-    const [kind, id] = v.split(':') as ['profile' | 'device', string];
-    S.printer = { kind, id };
+    const [kind, id, nz] = v.split(':') as ['profile' | 'device', string, string];
+    const nozzle = +nz || 0.4;
+    S.printer = { kind, id, nozzle };
     const bed = bedOfPrinter();
-    S.slice = { ...S.slice, bedX: bed[0], bedY: bed[1], printer: kind === 'profile' ? id : S.slice.printer };
-    S.physics = physicsFor(S.slice.printer);
-    changed(false); renderAll();
+    const machine = kind === 'profile' ? id : machineOfDevice(host?.printers().find((p) => p.id === id)?.name ?? '')?.id ?? S.slice.printer;
+    const L = nozzleLimits(nozzle, machine);
+    // everything follows the nozzle: line, layer, flow, speed; the wall is at least one line
+    S.slice = { ...S.slice, bedX: bed[0], bedY: bed[1], printer: machine, nozzle, lineWidth: L.lineDef, layerHeight: L.layerDef, firstLayerHeight: Math.min(L.layerMax, +(L.layerDef * 1.2).toFixed(2)), maxVolumetric: L.flow, speed: L.speedDef, firstLayerSpeed: Math.round(L.speedDef / 2) };
+    S.physics = { ...physicsFor(machine), hotendFlow: L.flow };
+    if (S.design.wall < L.lineDef) S.design.wall = L.lineDef;
+    const maxCount = Math.floor((Math.PI * S.design.maxDiameter) / (L.minFeature * 1.5));
+    if (S.design.relief.count > maxCount) S.design.relief.count = Math.max(1, maxCount);
+    changed(true); renderAll();
   };
-  printerSel.onchange = () => { if (printerSel.value === '__manage') { printerSel.value = S.printer ? `${S.printer.kind}:${S.printer.id}` : ''; host?.manage(); return; } choosePrinter(printerSel.value); };
+  const printerKey = () => (S.printer ? `${S.printer.kind}:${S.printer.id}:${S.printer.nozzle}` : '');
+  printerSel.onchange = () => { if (printerSel.value === '__manage') { printerSel.value = printerKey(); host?.manage(); return; } choosePrinter(printerSel.value); };
   const renderPrinterSel = () => {
     const { devs, profiles } = printerList();
     printerSel.innerHTML = '';
-    printerSel.append(h('option', { value: '', disabled: true }, 'Select printer…'));
-    if (devs.length) printerSel.append(h('optgroup', { label: 'Connected printers' }, ...devs.map((d) => h('option', { value: `device:${d.id}` }, `${d.name} · ${d.state}`))));
-    printerSel.append(h('optgroup', { label: 'Printer profiles' }, ...profiles.map((p) => h('option', { value: `profile:${p.id}` }, `${p.name} (${p.bed[0]}×${p.bed[1]})`))));
+    printerSel.append(h('option', { value: '', disabled: true }, 'Select printer & nozzle…'));
+    if (devs.length) printerSel.append(h('optgroup', { label: 'Connected printers' }, ...devs.flatMap((d) => nozzlesOf('device', d.id, d.name).map((n) => h('option', { value: `device:${d.id}:${n}` }, `${d.name} · ${n} mm · ${d.state}`)))));
+    printerSel.append(h('optgroup', { label: 'My printers' }, ...profiles.flatMap((p) => p.nozzles.map((n) => h('option', { value: `profile:${p.id}:${n}` }, `${p.name} · ${n} mm nozzle`)))));
     if (host) printerSel.append(h('option', { value: '__manage' }, 'Connect a printer…'));
-    printerSel.value = S.printer ? `${S.printer.kind}:${S.printer.id}` : '';
+    printerSel.value = printerKey();
     printerBox.classList.toggle('mxs-need', !S.printer);
   };
   const renderGate = () => {
@@ -200,14 +215,16 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     if (S.printer) return;
     const { devs, profiles } = printerList();
     gate.innerHTML = '';
-    const pickBtn = (v: string, name: string, meta: string) => { const b = h('button', { class: 'mxs-gpick' }, h('b', {}, name), h('small', {}, meta)); b.onclick = () => choosePrinter(v); return b; };
+    const machineCard = (kind: 'profile' | 'device', id: string, name: string, meta: string, nozzles: number[]) =>
+      h('div', { class: 'mxs-gpick mxs-gmachine' }, h('b', {}, name), h('small', {}, meta),
+        h('div', { class: 'mxs-gnoz' }, h('span', {}, 'Nozzle'), ...nozzles.map((n) => { const b = h('button', { class: 'mxs-btn mxs-sm' }, `${n} mm`); b.onclick = () => choosePrinter(`${kind}:${id}:${n}`); return b; })));
     gate.append(h('div', { class: 'mxs-gcard' },
-      h('h2', {}, 'Select your printer to start'),
-      h('p', {}, 'Motionex sizes the bed, the build height and the G-code for it. You can change it any time from the top right.'),
+      h('h2', {}, 'Choose your printer and nozzle'),
+      h('p', {}, 'Everything in Motionex follows from this: bed size, line width, layer height, flow, and how fine a motion or relief can be. You can change it any time from the top right.'),
       devs.length ? h('div', { class: 'mxs-glabel' }, 'Connected printers') : null,
-      devs.length ? h('div', { class: 'mxs-ggrid' }, ...devs.map((d) => pickBtn(`device:${d.id}`, d.name, d.state))) : null,
-      h('div', { class: 'mxs-glabel' }, 'Printer profiles'),
-      h('div', { class: 'mxs-ggrid' }, ...profiles.map((p) => pickBtn(`profile:${p.id}`, p.name, `${p.bed[0]} × ${p.bed[1]} × ${p.bed[2]} mm`))),
+      devs.length ? h('div', { class: 'mxs-ggrid' }, ...devs.map((d) => machineCard('device', d.id, d.name, d.state, nozzlesOf('device', d.id, d.name)))) : null,
+      h('div', { class: 'mxs-glabel' }, 'My printers'),
+      h('div', { class: 'mxs-ggrid' }, ...profiles.map((p) => machineCard('profile', p.id, p.name, `${p.bed[0]} × ${p.bed[1]} × ${p.bed[2]} mm`, p.nozzles))),
       host ? (() => { const b = h('button', { class: 'mxs-btn' }, icon('printer'), 'Connect a printer (LAN, Klipper, OctoPrint, USB)…'); b.onclick = () => host.manage(); return b; })() : h('p', { class: 'mxs-muted' }, 'Connecting and sending to printers works in the Motionex desktop app.')));
   };
   const offHost = host?.subscribe(() => { renderPrinterSel(); renderGate(); if (S.step === 'slice') renderPanel(); if (S.rail === 'printers') renderPage(); }) ?? (() => {});
@@ -476,7 +493,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         row('Narrow at top', num(() => D().narrowTop, (v) => (D().narrowTop = v), -0.6, 0.6, 0.01, '', dChange), Math.abs(D().narrowTop) > 0.45 ? 'Strong taper: check the overhang.' : undefined),
         row('Twist', num(() => D().twist, (v) => (D().twist = v), 0, 360, 5, '°', dChange)),
         row('Twist shape', select([['linear', 'Even'], ['s', 'S-curve'], ['wave', 'Back and forth']], () => D().twistShape, (v) => (D().twistShape = v), dChange)),
-        row('Wall thickness', num(() => D().wall, (v) => (D().wall = v), 0.4, 8, 0.05, 'mm', dChange), `${wallLines(D(), S.slice)} line${wallLines(D(), S.slice) > 1 ? 's' : ''} per layer`),
+        row('Wall thickness', num(() => D().wall, (v) => (D().wall = v), S.slice.lineWidth, 8, 0.05, 'mm', dChange), `${wallLines(D(), S.slice)} line${wallLines(D(), S.slice) > 1 ? 's' : ''} per layer`),
         row('Open bottom', toggle(() => D().openBottom, (v) => (D().openBottom = v), dChange))));
     } else if (S.designTab === 'relief') {
       const rl = D().relief;
@@ -508,7 +525,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         right.append(group(`Edit · ${ALL_RELIEFS.find((x) => x.id === rl.kind)?.name ?? (rl.kind === 'image' ? 'Imported' : rl.kind)}`,
           row('Relief on', seg<'outside' | 'inside' | 'both'>([['outside', 'Outside'], ['inside', 'Inside'], ['both', 'Both']], () => rl.side ?? 'outside', (v) => { rl.side = v; dChange(); renderPanel(); })),
           row('Direction', seg<'raised' | 'carved'>([['raised', 'Raised'], ['carved', 'Carved']], () => (rl.depth < 0 ? 'carved' : 'raised'), (v) => { rl.depth = Math.abs(rl.depth) * (v === 'carved' ? -1 : 1); dChange(); renderPanel(); })),
-          row(rl.kind === 'image' ? 'Repeats around' : 'Count around', num(() => rl.count, (v) => (rl.count = v), 1, 200, 1, '', dChange)),
+          row(rl.kind === 'image' ? 'Repeats around' : 'Count around', num(() => rl.count, (v) => (rl.count = v), 1, Math.max(2, Math.floor((Math.PI * D().maxDiameter) / (NZ().minFeature * 1.5))), 1, '', dChange), `Up to ${Math.max(2, Math.floor((Math.PI * D().maxDiameter) / (NZ().minFeature * 1.5)))} round this piece with a ${NZ().d} mm nozzle`),
           row('Depth', num(() => rl.depth, (v) => (rl.depth = v), -8, 8, 0.1, 'mm', dChange), Math.abs(rl.depth) > D().wall * 1.5 ? `Deeper than ${(D().wall * 1.5).toFixed(1)} mm thins the wall.` : 'Negative depth carves in.'),
           custom ? row('Edge softness', num(() => rl.edge ?? 0.15, (v) => (rl.edge = v), 0, 1, 0.01, '', dChange), '0 = knife-sharp edges.') : null,
           custom ? row('Cell height', num(() => rl.aspect ?? 1, (v) => (rl.aspect = v), 0.2, 5, 0.05, '×', dChange)) : null,
@@ -798,7 +815,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const all = h('button', { class: 'mxs-linkb' }, 'All'); all.onclick = () => { view.setKindsVisible({ outer: true, inner: true, base: true, top: true }); renderPanel(); };
     return group('Show lines', h('div', { class: 'mxs-checks mxs-checks-col' }, box('outer', 'Outer wall'), box('inner', 'Inner walls'), box('base', 'Bottom layers'), box('top', 'Top layers'), all),
       h('p', { class: 'mxs-hint' }, 'Hidden lines can’t be picked or brushed, so you can hide the rest and work on one kind at a time. Use the slider under the view to cut down to any layer.'),
-      row('Wall thickness', num(() => S.design.wall, (x) => (S.design.wall = x), 0.4, 8, 0.05, 'mm', () => { changed(true); previewNow(); renderPanel(); }), `${wallLines(S.design, S.slice)} line${wallLines(S.design, S.slice) > 1 ? 's' : ''} per layer at ${S.slice.lineWidth} mm`),
+      row('Wall thickness', num(() => S.design.wall, (x) => (S.design.wall = x), S.slice.lineWidth, 8, 0.05, 'mm', () => { changed(true); previewNow(); renderPanel(); }), `${wallLines(S.design, S.slice)} line${wallLines(S.design, S.slice) > 1 ? 's' : ''} per layer at ${S.slice.lineWidth} mm`),
       row('Bottom layers', num(() => S.slice.baseLayers, (x) => (S.slice.baseLayers = x), 0, 12, 1, '', () => { changed(false); previewNow(); renderPanel(); })),
       row('Top layers', num(() => S.slice.topLayers ?? 0, (x) => (S.slice.topLayers = x), 0, 12, 1, '', () => { changed(false); previewNow(); renderPanel(); }), 'Closes the top (lids, pendants printed upright).'));
   }
@@ -875,16 +892,16 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const bed = bedOfPrinter();
     const sliceB = h('button', { class: 'mxs-btn mxs-accent mxs-wide' }, icon('slice'), result && !stale ? 'Slice again' : 'Slice');
     sliceB.onclick = doSlice;
-    right.append(group('Printer', h('p', { class: 'mxs-picked' }, `${pname} · bed ${bed[0]} × ${bed[1]} × ${bed[2]} mm`),
+    right.append(group('Printer', h('p', { class: 'mxs-picked' }, `${pname} · ${S.printer?.nozzle ?? 0.4} mm nozzle · bed ${bed[0]} × ${bed[1]} × ${bed[2]} mm`),
       row('Spiral vase', toggle(() => s.spiral, (v) => (s.spiral = v), sc), 'One continuous wall, no seam.'),
       row('Print upside down', toggle(() => s.flip, (v) => (s.flip = v), sc), S.design.family === 'pendant' ? 'Pendants print best flipped.' : undefined)));
     right.append(group('Thickness & layer',
-      row('Layer height', num(() => s.layerHeight, (v) => (s.layerHeight = v), 0.08, 1.2, 0.02, 'mm', sc)),
-      row('First layer', num(() => s.firstLayerHeight, (v) => (s.firstLayerHeight = v), 0.1, 1.2, 0.02, 'mm', sc)),
-      row('Line width', num(() => s.lineWidth, (v) => (s.lineWidth = v), 0.3, 2.8, 0.01, 'mm', sc)),
+      row('Layer height', num(() => s.layerHeight, (v) => (s.layerHeight = v), NZ().layerMin, NZ().layerMax, 0.01, 'mm', sc), `${NZ().layerMin}–${NZ().layerMax} mm for a ${NZ().d} mm nozzle`),
+      row('First layer', num(() => s.firstLayerHeight, (v) => (s.firstLayerHeight = v), NZ().layerMin, NZ().layerMax, 0.01, 'mm', sc)),
+      row('Line width', num(() => s.lineWidth, (v) => (s.lineWidth = v), NZ().lineMin, NZ().lineMax, 0.01, 'mm', sc), `${NZ().lineMin}–${NZ().lineMax} mm · beads ${NZ().beadMin}–${NZ().beadMax} mm`),
       row('Bottom layers', num(() => s.baseLayers, (v) => (s.baseLayers = v), 0, 12, 1, '', sc)),
       row('Top layers', num(() => s.topLayers ?? 0, (v) => (s.topLayers = v), 0, 12, 1, '', sc)),
-      row('Wall thickness', num(() => S.design.wall, (v) => (S.design.wall = v), 0.4, 8, 0.05, 'mm', () => { changed(true); renderPanel(); }), `${wallLines(S.design, s)} line${wallLines(S.design, s) > 1 ? 's' : ''} per layer${s.spiral && wallLines(S.design, s) > 1 ? ' · spiral vase needs 1 line' : ''}`)));
+      row('Wall thickness', num(() => S.design.wall, (v) => (S.design.wall = v), S.slice.lineWidth, 8, 0.05, 'mm', () => { changed(true); renderPanel(); }), `${wallLines(S.design, s)} line${wallLines(S.design, s) > 1 ? 's' : ''} per layer${s.spiral && wallLines(S.design, s) > 1 ? ' · spiral vase needs 1 line' : ''}`)));
     right.append(group('Speed & temperature',
       row('Wall speed', num(() => s.speed, (v) => (s.speed = v), 5, 300, 5, 'mm/s', sc)),
       row('First layer', num(() => s.firstLayerSpeed, (v) => (s.firstLayerSpeed = v), 5, 100, 5, 'mm/s', sc)),

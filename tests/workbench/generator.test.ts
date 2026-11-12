@@ -10,7 +10,7 @@ const small = () => ({ ...defaultDesign('vase'), height: 6, maxDiameter: 40 });
 describe('Motionex Studio slicer', () => {
   it('slices a plain design with the expected layers and no bad numbers', () => {
     const r = slice(small(), DEFAULT_SLICE, [], brush);
-    expect(r.layers).toBe(1 + Math.ceil((6 - 0.28) / 0.24 - 1e-6));
+    expect(r.layers).toBe(1 + Math.ceil((6 - DEFAULT_SLICE.firstLayerHeight) / DEFAULT_SLICE.layerHeight - 1e-6));
     expect(r.gcode).toContain(';LAYER_CHANGE');
     expect(r.gcode).not.toMatch(/[XYZEF]-?(NaN|Infinity)/);
     expect(r.stats.maxOffset).toBe(0);

@@ -337,3 +337,16 @@ details.mxs-group:not(.mxs-adv):not([open]) { background: var(--mxs-soft); }
 .mxs-slicebtn { height: 34px; padding: 0 22px; font-size: 14px; font-weight: 700; border-radius: 8px; gap: 8px; box-shadow: 0 2px 8px rgba(239,108,42,.35); }
 .mxs-slicebtn.on { box-shadow: inset 0 0 0 2px rgba(255,255,255,.55), 0 2px 8px rgba(239,108,42,.35); }
 details.mxs-group:not(.mxs-adv) > .mxs-wide, details.mxs-group:not(.mxs-adv) > .mxs-sendbox { width: auto; box-sizing: border-box; display: flex; justify-content: center; }
+
+/* view cube (bottom right of the 3D view) */
+.mxs-cube { position: absolute; right: 18px; bottom: 18px; width: 92px; height: 92px; z-index: 3; zoom: var(--mxs-ui); }
+.mxs-cube-stage { position: absolute; left: 46px; top: 46px; width: 0; height: 0; transform-style: preserve-3d; }
+.mxs-cube-face { position: absolute; box-sizing: border-box; display: grid; place-items: center; padding: 0; border: 1px solid var(--mxs-line); background: color-mix(in srgb, var(--mxs-panel) 92%, transparent); color: var(--mxs-muted); font: 600 9.5px/1 var(--mxs-font); letter-spacing: .02em; backface-visibility: hidden; cursor: pointer; transform-origin: 50% 50%; }
+.mxs-cube-face:hover { background: var(--mxs-accent); color: var(--mxs-accent-text); border-color: var(--mxs-accent); }
+.mxs-cube-home { position: absolute; right: -4px; top: -4px; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 1px solid var(--mxs-line); border-radius: 6px; background: var(--mxs-panel); color: var(--mxs-muted); cursor: pointer; }
+.mxs-cube-home:hover { color: var(--mxs-accent); }
+.mxs-gmachine { cursor: default; display: grid; gap: 4px; }
+.mxs-gnoz { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.mxs-gnoz span { color: var(--mxs-muted); font-size: 11px; margin-right: 2px; }
+.mxs-gnoz .mxs-btn { font-weight: 600; }
+.mxs-gnoz .mxs-btn:hover { background: var(--mxs-accent); color: var(--mxs-accent-text); border-color: var(--mxs-accent); }

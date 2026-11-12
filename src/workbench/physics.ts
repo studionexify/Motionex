@@ -18,11 +18,8 @@ export interface Physics {
   ooze: number;         // mm³ released at a restart after travel
 }
 export const PHYSICS_BY_PRINTER: Record<string, Partial<Physics>> = {
-  'bbl-a1': { accel: 10000, scv: 9, hotendFlow: 28 }, 'bbl-a1mini': { accel: 10000, scv: 9, hotendFlow: 28 },
-  'bbl-p1s': { accel: 10000, scv: 9, hotendFlow: 30 }, 'bbl-h2d': { accel: 12000, scv: 9, hotendFlow: 40 },
-  ender3v3: { accel: 8000, scv: 6, hotendFlow: 24 }, k1max: { accel: 8000, scv: 6, hotendFlow: 30 }, k2plus: { accel: 10000, scv: 6, hotendFlow: 32 },
-  mk4: { accel: 4000, scv: 6, hotendFlow: 20 }, coreone: { accel: 5000, scv: 6, hotendFlow: 25 },
-  neptune4pro: { accel: 5000, scv: 5, hotendFlow: 22 }, kobra3: { accel: 8000, scv: 6, hotendFlow: 24 },
+  'bbl-a1': { accel: 10000, scv: 9, hotendFlow: 21 }, 'bbl-p1s': { accel: 10000, scv: 9, hotendFlow: 21 },
+  'snapmaker-u1': { accel: 10000, scv: 8, hotendFlow: 20 }, 'elegoo-n4max': { accel: 5000, scv: 5, hotendFlow: 18 },
 };
 export const DEFAULT_PHYSICS: Physics = { accel: 5000, scv: 5, lag: 0.035, hotendFlow: 20, sag: 1, ooze: 0.25 };
 export const physicsFor = (printer: string): Physics => ({ ...DEFAULT_PHYSICS, ...PHYSICS_BY_PRINTER[printer] });
