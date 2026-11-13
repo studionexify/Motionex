@@ -35,7 +35,9 @@ describe('wall line layout', () => {
     const outer = segs.filter((g) => g.kind === 'wall'), inner = segs.filter((g) => g.kind === 'inner');
     const spread = (a: number[]) => Math.max(...a) - Math.min(...a);
     expect(spread(outer.map(rad))).toBeGreaterThan(1.1);
-    const innermost = inner.slice(0, Math.floor(inner.length / 4));   // first printed = innermost line
+    // first printed line of the layer (up to the first travel) is the innermost line
+    const all = r.segs.slice(r.layerStart[L], r.layerStart[L + 1]); const st = all.findIndex((g) => g.kind === 'inner');
+    const innermost = []; for (let i = st; i < all.length && all[i].kind === 'inner'; i++) innermost.push(all[i]);
     expect(spread(innermost.map(rad))).toBeLessThan(0.05);
   });
 });

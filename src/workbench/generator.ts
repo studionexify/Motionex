@@ -118,7 +118,22 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
   const cx = s.bedX / 2, cy = s.bedY / 2;
   const fa = Math.PI * (s.filamentDia / 2) ** 2;
   let x = cx, y = cy, z = 0, eTot = 0, len = 0, secs = 0, maxOff = 0, curLayer = 0, curRuled = false, curRule = -1;
-  const emit = (l: string) => out.push(l);
+  // Moves are merged while they stay on a straight line (within 0.01 mm) with the same bead, speed and
+  // rule, so a smooth wall becomes a few long moves instead of thousands of tiny ones: smaller G-code,
+  // faster slicing, physics and preview. Detail (motions, reliefs) keeps every point it needs.
+  const TOL = 0.01;
+  let pend: { s: Seg; pts: number[]; sp: number } | null = null;
+  const flush = () => {
+    if (!pend) return;
+    const g = pend.s, d = Math.hypot(g.x - g.x0, g.y - g.y0, g.z - g.z0);
+    const e = (d * g.h * g.w) / fa;
+    g.e = e; eTot += e; len += d; secs += d / pend.sp;
+    g.gl = out.length;
+    out.push(`G1 X${f3(g.x)} Y${f3(g.y)}${Math.abs(g.z - g.z0) > 1e-6 ? ` Z${f3(g.z)}` : ''} E${f5(e)} F${Math.round(pend.sp * 60)}`);
+    segs.push(g);
+    pend = null;
+  };
+  const emit = (l: string) => { flush(); out.push(l); };
   const volCap = (h: number, w: number) => s.maxVolumetric / (h * w);
 
   const travel = (nx: number, ny: number, nz = z) => {
@@ -139,11 +154,27 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
     const d = Math.hypot(nx - x, ny - y, nz - z);
     if (d < 1e-4) return;
     const sp = Math.min(speed, volCap(h, w * flow));
-    const e = (d * h * w * flow * s.flowRatio) / fa;
-    eTot += e; len += d; secs += d / sp;
-    const gl = out.length;
-    emit(`G1 X${f3(nx)} Y${f3(ny)}${Math.abs(nz - z) > 1e-6 ? ` Z${f3(nz)}` : ''} E${f5(e)} F${Math.round(sp * 60)}`);
-    segs.push({ gl, x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind, speed: sp, flow, h, w: w * flow * s.flowRatio, e, ret: false, layer: curLayer, ruled: curRuled, rule: curRule });
+    const bw = w * flow * s.flowRatio;
+    if (pend) {
+      const g = pend.s;
+      if (g.kind === kind && g.h === h && Math.abs(g.w - bw) < 0.004 && Math.abs(pend.sp - sp) < 0.5 && g.ruled === curRuled && g.rule === curRule && g.layer === curLayer && pend.pts.length < 240) {
+        // every point merged so far must stay within TOL of the new straight move
+        const ax = g.x0, ay = g.y0, az = g.z0, dx = nx - ax, dy = ny - ay, dz = nz - az, L2 = dx * dx + dy * dy + dz * dz;
+        let ok = L2 > 0;
+        const pts = pend.pts;
+        pts.push(x, y, z);                  // the current end becomes an inner point of the merged move
+        for (let i = 0; ok && i < pts.length; i += 3) {
+          const px = pts[i] - ax, py = pts[i + 1] - ay, pz = pts[i + 2] - az, t = (px * dx + py * dy + pz * dz) / L2;
+          if (t <= 0 || t >= 1) { ok = false; break; }
+          const ex = px - t * dx, ey = py - t * dy, ez = pz - t * dz;
+          if (ex * ex + ey * ey + ez * ez > TOL * TOL) ok = false;
+        }
+        if (ok) { g.x = nx; g.y = ny; g.z = nz; x = nx; y = ny; z = nz; return; }
+        pts.length -= 3;
+      }
+      flush();
+    }
+    pend = { s: { x0: x, y0: y, z0: z, x: nx, y: ny, z: nz, kind, speed: sp, flow, h, w: bw, e: 0, ret: false, layer: curLayer, ruled: curRuled, rule: curRule }, pts: [], sp };
     x = nx; y = ny; z = nz;
   };
 
@@ -203,6 +234,7 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
     const zTop = li === 0 ? flh : Math.min(H, flh + li * lh);
     const h = li === 0 ? flh : lh;
     const speed = li === 0 ? s.firstLayerSpeed : s.speed;
+    flush();
     layerStart.push(segs.length); layerZ.push(zTop); curLayer = li;
     const zd = s.flip ? H - zTop : zTop;
     const prep = prepareRules(rules, zd, s.reachLayerHeight ?? lh);
@@ -349,6 +381,7 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
   if (design.relief.kind !== 'smooth' && design.relief.depth !== 0 && (Math.PI * design.maxDiameter) / Math.max(1, design.relief.count) < NZ.minFeature * 1.5) warnings.push(`The relief is finer than the ${NZ.d} mm nozzle can show: use a lower count.`);
   if (s0.lineWidth !== s.lineWidth || s0.layerHeight !== s.layerHeight) warnings.push(`Line width / layer height were kept within the ${NZ.d} mm nozzle's range.`);
   if (!segs.length) warnings.push('Nothing to print: the layer height is taller than the piece.');
+  flush();
   return { gcode: out.join('\n') + '\n', segs, layers: nLayers, layerStart, layerZ, warnings,
     stats: { lengthMm: len, filamentMm: eTot, grams: (eTot * fa) / 1000 * 1.24, seconds: secs, lines: out.length, maxOffset: maxOff } };
 }
@@ -358,4 +391,26 @@ export function motionSamples(b: MotionBrush, n = 96): [number, number][] {
   const r: [number, number][] = [];
   for (let i = 0; i <= n; i++) { const u = (i / n) * 2; r.push([u + evalCurve(b.curves.along_offset, frac(u)) * 0.25, evalCurve(b.curves.lateral_offset, frac(u))]); }
   return r;
+}
+
+const KINDS: Seg['kind'][] = ['wall', 'motion', 'base', 'top', 'inner', 'travel'];
+/** Pack moves into flat typed arrays (fast to hand from a Web Worker to the page; no object copying). */
+export function packSegs(segs: Seg[]) {
+  const n = segs.length, f = new Float32Array(n * 11), i32 = new Int32Array(n * 3), u8 = new Uint8Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const g = segs[i], o = i * 11;
+    f[o] = g.x0; f[o + 1] = g.y0; f[o + 2] = g.z0; f[o + 3] = g.x; f[o + 4] = g.y; f[o + 5] = g.z; f[o + 6] = g.speed; f[o + 7] = g.flow; f[o + 8] = g.h; f[o + 9] = g.w; f[o + 10] = g.e;
+    i32[i * 3] = g.layer; i32[i * 3 + 1] = g.rule; i32[i * 3 + 2] = g.gl ?? -1;
+    u8[i * 3] = KINDS.indexOf(g.kind); u8[i * 3 + 1] = g.ret ? 1 : 0; u8[i * 3 + 2] = g.ruled ? 1 : 0;
+  }
+  return { n, f, i32, u8 };
+}
+export function unpackSegs(p: ReturnType<typeof packSegs>): Seg[] {
+  const { n, f, i32, u8 } = p, out = new Array<Seg>(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 11, gl = i32[i * 3 + 2];
+    out[i] = { x0: f[o], y0: f[o + 1], z0: f[o + 2], x: f[o + 3], y: f[o + 4], z: f[o + 5], speed: f[o + 6], flow: f[o + 7], h: f[o + 8], w: f[o + 9], e: f[o + 10],
+      layer: i32[i * 3], rule: i32[i * 3 + 1], gl: gl >= 0 ? gl : undefined, kind: KINDS[u8[i * 3]], ret: u8[i * 3 + 1] === 1, ruled: u8[i * 3 + 2] === 1 };
+  }
+  return out;
 }

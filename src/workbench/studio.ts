@@ -8,7 +8,7 @@ import { effectPhase } from '../plugins/motionex/modifier';
 import { ALL_RELIEFS, defaultDesign, estimate, makeSurface, FAMILIES, NOISE_RELIEFS, OUTLINES, profileR, relief as reliefAt, RELIEFS, SECTIONS, surprise, type Design, type Family, type ProfilePoint } from './design';
 import { heightBytes, type HeightMap } from './reliefs';
 import { fileToMap, textToMap } from './relief-import';
-import { DEFAULT_SLICE, nozzleLimits, wallLines, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
+import { DEFAULT_SLICE, nozzleLimits, unpackSegs, wallLines, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
 import { compensate, physicsFor, simulate, type Physics, type PrintSim } from './physics';
@@ -311,7 +311,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       sliceWorker ??= opts.worker();
       sliceWorker.onmessage = (e) => {
         if (seq !== sliceSeq) return;
-        if (e.data.ok) showSlice(e.data.result, e.data.sim); else { staleTag.textContent = `Slicing failed: ${e.data.error}`; }
+        if (e.data.ok) { const d = e.data; showSlice({ ...d.result, segs: unpackSegs(d.packed), gcode: new TextDecoder().decode(d.gcode), plan: d.plan ? Array.from(d.plan as Float64Array) : undefined }, d.sim); } else { staleTag.textContent = `Slicing failed: ${e.data.error}`; }
       };
       sliceWorker.postMessage(JSON.parse(JSON.stringify({ design: S.design, slice: S.slice, zones: S.zones, rules: S.rules, physics: S.physics })));
       return;
