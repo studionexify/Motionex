@@ -10,7 +10,9 @@ const RES = 128;   // samples per pattern cell (≈0.3 mm on a 30 mm cell; sub-s
 const TILE = 10;   // tile size in cells: a common period of every pattern's internal repeats
 
 export interface Level { d: Float32Array; step: number }
-export interface Geo { sharp: boolean; W: number; H: number; pu: number; pv: number; base: number; levels: Level[] }
+/** sharp: flat plateaus with exact outlines. hybrid: smooth shading inside regions, exact outlines where the
+ *  height jumps (seigaiha, scales, quilted…): heights come from the formula, edges from the distance field. */
+export interface Geo { sharp: boolean; hybrid?: boolean; iso?: number; W: number; H: number; pu: number; pv: number; base: number; levels: Level[] }
 
 // ── exact squared EDT (Felzenszwalb–Huttenlocher), periodic via a 3× unrolled line
 function edt1(f: Float64Array, n: number, out: Float64Array, v: Int32Array, z: Float64Array) {
@@ -111,7 +113,23 @@ export function mapGeo(m: HeightMap): Geo {
 
 function build(vals: Float32Array, W: number, H: number, pxPerCell: number, pu: number, pv: number, force: boolean, at: (x: number, y: number) => number): Geo {
   const pl = plateaus(vals);
-  if (!pl.sharp && !force) return { sharp: false, W, H, pu, pv, base: 0, levels: [] };
+  if (!pl.sharp && !force) {
+    // look for jumps: neighbouring samples (1/RES of a cell apart) that differ by more than a smooth slope can
+    const mids: number[] = []; let pairs = 0;
+    for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) {
+      const a = vals[y * W + x], b = vals[y * W + (x + 1) % W], c = vals[((y + 1) % H) * W + x];
+      pairs += 2;
+      if (Math.abs(a - b) > 0.15) mids.push((a + b) / 2);
+      if (Math.abs(a - c) > 0.15) mids.push((a + c) / 2);
+    }
+    if (mids.length < pairs * 0.002) return { sharp: false, W, H, pu, pv, base: 0, levels: [] };
+    mids.sort((p, q) => p - q);
+    const iso = mids[Math.floor(mids.length / 2)];
+    const inside = new Uint8Array(W * H); for (let i = 0; i < inside.length; i++) inside[i] = vals[i] > iso ? 1 : 0;
+    const d = signedField(inside, W, H, pxPerCell);
+    refine(d, W, H, pxPerCell, iso, at);
+    return { sharp: true, hybrid: true, iso, W, H, pu, pv, base: 0, levels: [{ d, step: 1 }] };
+  }
   const cuts = pl.sharp ? pl.cuts : [{ iso: 0.5, step: 1 }];
   const levels: Level[] = cuts.map(({ iso, step }) => {
     const inside = new Uint8Array(W * H); for (let i = 0; i < inside.length; i++) inside[i] = vals[i] > iso ? 1 : 0;

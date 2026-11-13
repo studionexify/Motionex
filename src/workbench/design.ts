@@ -212,7 +212,8 @@ export function relief(d: Design, t: number, th: number, R: number, raw = false)
         else f = rl.mapVector === false ? sampleMapCubic(rl.map, uu, y) : sampleMapVector(rl.map, uu, y);
       } else {
         const p = patternById(rl.kind); if (!p) return 0;
-        if (gp) f = geoHeight(gp, uu, vv, cell, bevelOf(rl, cellMaxOf(d)));
+        if (gp?.hybrid) f = hybridHeight(gp, p.fn, rl.seed ?? 1, uu, vv, cell, bevelOf(rl, cellMaxOf(d)));
+        else if (gp) f = geoHeight(gp, uu, vv, cell, bevelOf(rl, cellMaxOf(d)));
         else f = clamp(p.fn(uu, vv, rl.seed ?? 1), 0, 1);
       }
       if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1);
@@ -376,6 +377,18 @@ function geoOf(d: Design, _cell: number, raw: boolean): Geo | null {
   }
   memo = { rl, kind: rl.kind, seed, edge, vec, map: rl.map, maxD: d.maxDiameter, n, g, minW };
   return g;
+}
+/** Hybrid pattern: the formula's own height away from edges; across a jump edge a straight bevel between the
+ *  heights just inside and just outside it (sampled along the edge normal). */
+function hybridHeight(g: Geo, fn: (u: number, v: number, s: number) => number, seed: number, u: number, v: number, cell: number, bev: number) {
+  const lv = g.levels[0], sd = geoSd(g, lv, u, v), half = bev / 2 / cell;
+  if (Math.abs(sd) >= half) return clamp(fn(u, v, seed), 0, 1);
+  const e = 0.5 / 128, gx = geoSd(g, lv, u + e, v) - geoSd(g, lv, u - e, v), gy = geoSd(g, lv, u, v + e) - geoSd(g, lv, u, v - e), gl = Math.hypot(gx, gy) || 1;
+  const nx = gx / gl, ny = gy / gl, eps = 0.15 / 128;
+  const tin = sd + half + eps, tout = half - sd + eps;
+  const hIn = clamp(fn(u - nx * tin, v - ny * tin, seed), 0, 1), hOut = clamp(fn(u + nx * tout, v + ny * tout, seed), 0, 1);
+  const k = bevelH(sd * cell, bev);
+  return hOut + (hIn - hOut) * k;
 }
 function geoHeight(g: Geo, u: number, v: number, cell: number, bev: number) {
   let f = g.base;

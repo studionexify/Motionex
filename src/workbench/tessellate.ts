@@ -64,7 +64,10 @@ export function faceMesh(d: Design, rows: number, cols: number, face: 'outer' | 
   const idx: number[] = [];
   const tri = (a: number, b: number, c: number) => { if (flip) idx.push(a, c, b); else idx.push(a, b, c); };
   const sideOf = (k: number, c: number) => { const v = vals[k * C + c]; return v > 0 ? 1 : v < 0 ? -1 : 0; };
-  const flat = (k: number, ref: number) => { for (let c = 0; c < C; c++) if (sideOf(k, c) !== sideOf(ref, c) || sideOf(k, c) === 0) return false; return true; };
+  // grid heights, so shaded (non-flat) regions are never merged into flat fans
+  const gh = new Float32Array(G); for (let k = 0; k < G; k++) gh[k] = parts.rel(vz[k], vt[k]);
+  const hTol = Math.max(1e-4, Math.abs(d.relief.depth) * 0.002);
+  const flat = (k: number, ref: number) => { if (Math.abs(gh[k] - gh[ref]) > hTol) return false; for (let c = 0; c < C; c++) if (sideOf(k, c) !== sideOf(ref, c) || sideOf(k, c) === 0) return false; return true; };
 
   /** Ear clipping in the (arc length, height) plane: never folds, keeps the winding of the cell. */
   const R0c = d.maxDiameter / 2;
