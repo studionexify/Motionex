@@ -15,8 +15,12 @@ export const setEdge = (e: number) => { EDGE = Math.min(1, Math.max(0, e)); };
 /** Step from 0 to 1 centred between a and b; its width shrinks with EDGE so shapes keep exact positions but crisp sides. */
 const ss = (a: number, b: number, x: number) => { const m = (a + b) / 2, hw = Math.max(0.004, Math.abs(b - a) / 2 * EDGE * 2) * Math.sign(b - a || 1); const t = cl((x - (m - hw)) / (2 * hw)); return t * t * (3 - 2 * t); };
 const tri = (x: number) => 1 - Math.abs(2 * fr(x) - 1);            // 0..1..0
-/** Ridge of width w centred on d = 0: flat top, crisp bevelled sides. */
-const line = (d: number, w: number) => 1 - ss(w * 0.5, w * 0.5 + Math.max(0.01, w * 0.5), Math.abs(d));
+/** Narrowest printable line, in pattern-cell units (set per piece: about 1 mm on the real surface). */
+let MINW = 0;
+export const setMinLine = (w: number) => { MINW = Math.max(0, w); };
+/** Ridge of width w centred on d = 0: flat top, crisp bevelled sides; never thinner than MINW. */
+const line = (d: number, w0: number) => lineW(d, Math.max(w0, MINW));
+const lineW = (d: number, w: number) => 1 - ss(w * 0.5, w * 0.5 + Math.max(0.01, w * 0.5), Math.abs(d));
 const hash2 = (x: number, y: number, s: number) => { const h = Math.sin(x * 127.1 + y * 311.7 + s * 17.3) * 43758.5453; return h - Math.floor(h); };
 function noise2(x: number, y: number, s: number) {
   const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;

@@ -3,7 +3,7 @@
 // crosses is located exactly (bisection on the real function) and the nearer grid point is moved onto it,
 // so the mesh outline follows the pattern's true geometry. Quads are then split along the edge, not across.
 // Points stay exactly on the surface: their radius is evaluated at the moved (height, angle).
-import { makeInner, makeSurface, type Design } from './design';
+import { surfaceParts, type Design } from './design';
 
 export interface SurfaceGrid {
   rows: number; cols: number;
@@ -18,61 +18,78 @@ export interface SurfaceGrid {
 const TAU = Math.PI * 2;
 
 export function surfaceGrid(d: Design, rows: number, cols: number, face: 'outer' | 'inner', snap = true, levels: number[] = [0.5, 0.1, 0.9]): SurfaceGrid {
-  const surf = face === 'outer' ? makeSurface(d) : makeInner(d);
-  const plain = face === 'outer' ? makeSurface({ ...d, relief: { ...d.relief, kind: 'smooth' } }) : makeInner({ ...d, relief: { ...d.relief, kind: 'smooth' } });
+  const parts = surfaceParts(d, face);
   const W = cols + 1, N = (rows + 1) * W, H = d.height;
-  const zs = new Float64Array(N), ths = new Float64Array(N), f = new Float32Array(N);
-  const level = (z: number, th: number) => Math.abs(surf(z, th) - plain(z, th));
+  const zs = new Float64Array(N), ths = new Float64Array(N), f = new Float32Array(N), rv = new Float32Array(N);
+  const level = (z: number, th: number) => Math.abs(parts.rel(z, th));
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i <= rows; i++) for (let j = 0; j <= cols; j++) {
     const k = i * W + j, z = (i / rows) * H, th = (j / cols) * TAU;
     zs[k] = z; ths[k] = th;
-    const v = level(z, th); f[k] = v; if (v < lo) lo = v; if (v > hi) hi = v;
+    const r0 = parts.on ? parts.rel(z, th) : 0, v = Math.abs(r0); rv[k] = r0; f[k] = v; if (v < lo) lo = v; if (v > hi) hi = v;
   }
-  const hasRelief = d.relief.kind !== 'smooth' && d.relief.depth !== 0 && hi - lo > 1e-3;
+  const hasRelief = parts.on && hi - lo > 1e-3;
   const moved = new Uint8Array(N);
   if (snap && hasRelief) {
     // Trace the foot, the middle and the top of every slope (three levels), each onto its own grid points,
     // so the whole bevel — not just its centre line — follows the pattern's true outline.
-    const sz = new Float64Array(N), sth = new Float64Array(N), cnt = new Uint16Array(N), side = new Uint8Array(N);
-    for (const lvl of levels) {
-      const iso = lo + (hi - lo) * lvl;
-      sz.fill(0); sth.fill(0); cnt.fill(0); side.fill(0);
-      // dir: which neighbour the crossing lies towards (1 right, 2 left, 4 up, 8 down)
-      const cross = (a: number, b: number, dirA: number, dirB: number) => {
-        const fa = f[a] - iso, fb = f[b] - iso;
-        if (fa * fb >= 0) return;
-        let t0 = 0, t1 = 1;
-        const za = zs[a], ta = ths[a], dz = zs[b] - za, dt = ths[b] - ta;
-        for (let it = 0; it < 8; it++) { const tm = (t0 + t1) / 2; if ((level(za + dz * tm, ta + dt * tm) - iso) * fa > 0) t0 = tm; else t1 = tm; }
-        const t = (t0 + t1) / 2;
-        // nearer endpoint that is still free; a point already on a traced line stays there
-        let k = t < 0.5 ? a : b;
-        if (moved[k]) k = k === a ? b : a;
-        if (moved[k]) return;
-        sz[k] += za + dz * t; sth[k] += ta + dt * t; cnt[k]++; side[k] |= k === a ? dirA : dirB;
-      };
-      for (let i = 0; i <= rows; i++) for (let j = 0; j <= cols; j++) {
-        const k = i * W + j;
-        if (j < cols) cross(k, k + 1, 1, 2);
-        if (i < rows) cross(k, k + W, 4, 8);
+    // Points next to a pattern edge are projected straight onto it (along the local slope direction, in
+    // millimetres on the surface), to whichever traced level — foot, middle or top of the bevel — is
+    // nearest. Projection spaces the points evenly along every edge, straight or diagonal, and inside a
+    // thin line each point goes to the edge on its own side.
+    const R0 = d.maxDiameter / 2, dzc = H / rows, duc = (TAU * R0) / cols, cell = Math.min(dzc, duc);
+    const isos = levels.map((l) => lo + (hi - lo) * l);
+    const f0 = f.slice();   // levels before any point moves (for the local range)
+    const scan = levels.length > 1 ? 6 : 4, iters = levels.length > 1 ? 7 : 5;
+    const cand = new Uint8Array(N);
+    for (let i = 0; i <= rows; i++) for (let j = 0; j <= cols; j++) {
+      const k = i * W + j; let mn = f[k], mx = f[k];
+      if (j > 0) { mn = Math.min(mn, f[k - 1]); mx = Math.max(mx, f[k - 1]); } if (j < cols) { mn = Math.min(mn, f[k + 1]); mx = Math.max(mx, f[k + 1]); }
+      if (i > 0) { mn = Math.min(mn, f[k - W]); mx = Math.max(mx, f[k - W]); } if (i < rows) { mn = Math.min(mn, f[k + W]); mx = Math.max(mx, f[k + W]); }
+      for (const v of isos) if (mn < v && mx > v) { cand[k] = 1; break; }
+    }
+    const lv = (z: number, u: number) => level(z, u / R0);
+    for (let i = 0; i <= rows; i++) for (let j = 0; j < cols; j++) {
+      const k = i * W + j; if (!cand[k]) continue;
+      const z0 = zs[k], u0 = ths[k] * R0, h = cell * 0.35, edgeRow = i === 0 || i === rows;
+      let gz = edgeRow ? 0 : (lv(z0 + h, u0) - lv(z0 - h, u0)) / (2 * h);
+      const gu = (lv(z0, u0 + h) - lv(z0, u0 - h)) / (2 * h);
+      const gl = Math.hypot(gz, gu); if (gl < 1e-9) continue;
+      const dz = gz / gl, du = gu / gl, reach = cell * 0.6;
+      // foot and top measured against this spot's own low and high (thin lines never reach full height)
+      let llo = Infinity, lhi = -Infinity;
+      for (let di = -2; di <= 2; di++) for (let dj = -2; dj <= 2; dj++) { const ii = i + di, jj = (j + dj + cols) % cols; if (ii < 0 || ii > rows) continue; const v = f0[ii * W + jj]; if (v < llo) llo = v; if (v > lhi) lhi = v; }
+      const localIsos = lhi - llo > (hi - lo) * 0.15 ? levels.map((l) => llo + (lhi - llo) * l) : isos;
+      let best = Infinity, bz = z0, bu = u0;
+      for (const iso of localIsos) {
+        const g0 = lv(z0, u0) - iso;
+        // walk out both ways to the first sign change, then bisect
+        for (const sgn of [1, -1]) {
+          let prevT = 0, prevV = g0;
+          for (let st = 1; st <= scan; st++) {
+            const t = (sgn * reach * st) / scan, v = lv(z0 + dz * t, u0 + du * t) - iso;
+            if (v * prevV <= 0) {
+              let a = prevT, b = t, fa = prevV;
+              for (let it = 0; it < iters; it++) { const m = (a + b) / 2, fm = lv(z0 + dz * m, u0 + du * m) - iso; if (fm * fa > 0) { a = m; fa = fm; } else b = m; }
+              const tt = (a + b) / 2;
+              if (Math.abs(tt) < best) { best = Math.abs(tt); bz = z0 + dz * tt; bu = u0 + du * tt; }
+              break;
+            }
+            prevT = t; prevV = v;
+          }
+        }
       }
-      for (let k = 0; k < N; k++) if (cnt[k]) {
-        // a point with edges on both sides sits in a ridge narrower than two cells: moving it would fold the mesh
-        if ((side[k] & 3) === 3 || (side[k] & 12) === 12) continue;
-        const i = Math.floor(k / W);
-        if (i !== 0 && i !== rows) zs[k] = sz[k] / cnt[k];     // keep the base and the rim flat
-        ths[k] = sth[k] / cnt[k];
-        moved[k] = 1;
-        f[k] = level(zs[k], ths[k]);
-      }
+      if (best === Infinity) continue;
+      if (!edgeRow) zs[k] = bz;
+      ths[k] = bu / R0; moved[k] = 1;
+      rv[k] = parts.rel(zs[k], ths[k]); f[k] = Math.abs(rv[k]);
     }
     // the seam column (2π) mirrors column 0
-    for (let i = 0; i <= rows; i++) { const a = i * W, b = a + cols; zs[b] = zs[a]; ths[b] = ths[a] + TAU; f[b] = f[a]; }
+    for (let i = 0; i <= rows; i++) { const a = i * W, b = a + cols; zs[b] = zs[a]; ths[b] = ths[a] + TAU; f[b] = f[a]; rv[b] = rv[a]; }
   }
   const pos = new Float32Array(N * 3);
   for (let k = 0; k < N; k++) {
-    const r = surf(zs[k], ths[k]);
+    const r = parts.radius(zs[k], ths[k], rv[k]);
     pos[k * 3] = r * Math.cos(ths[k]); pos[k * 3 + 1] = r * Math.sin(ths[k]); pos[k * 3 + 2] = zs[k];
   }
   return { rows, cols, pos, f, moved };
@@ -98,7 +115,12 @@ export function triangulate(g: SurfaceGrid, rowMM: number, colMM: number, eps: n
   const tri = (a: number, b: number, c: number) => { if (flip) out.push(base + a, base + c, base + b); else out.push(base + a, base + b, base + c); };
   const quad = (i: number, j: number) => {
     const a = i * W + j, b = a + 1, c = a + W, e = c + 1;
-    if (quadDiagonal(f, a, b, c, e)) { tri(a, b, e); tri(a, e, c); } else { tri(a, b, c); tri(b, e, c); }
+    // split along the shorter diagonal in 3D (well-shaped triangles that follow traced edges); fall back to
+    // the relief level when both are about equal
+    const p = g.pos, dae = (p[a * 3] - p[e * 3]) ** 2 + (p[a * 3 + 1] - p[e * 3 + 1]) ** 2 + (p[a * 3 + 2] - p[e * 3 + 2]) ** 2;
+    const dbc = (p[b * 3] - p[c * 3]) ** 2 + (p[b * 3 + 1] - p[c * 3 + 1]) ** 2 + (p[b * 3 + 2] - p[c * 3 + 2]) ** 2;
+    const ae = Math.abs(dae - dbc) < 0.02 * (dae + dbc) ? quadDiagonal(f, a, b, c, e) : dae < dbc;
+    if (ae) { tri(a, b, e); tri(a, e, c); } else { tri(a, b, c); tri(b, e, c); }
   };
   const flat = (i0: number, j0: number) => {
     const f0 = f[i0 * W + j0];

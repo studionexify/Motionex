@@ -18,7 +18,7 @@ export interface Relief {
   /** Edge softness 0 (knife-sharp) … 1 (rounded). */
   edge?: number;
 }
-import { PATTERNS, patternById, sampleMapCubic, sampleMapVector, setEdge, type HeightMap } from './reliefs';
+import { PATTERNS, patternById, sampleMapCubic, sampleMapVector, setEdge, setMinLine, type HeightMap } from './reliefs';
 export type TwistShape = 'linear' | 's' | 'wave';
 
 export interface ProfilePoint { r: number; t: number } // r: 0..1 of max radius, t: 0..1 of height
@@ -153,9 +153,11 @@ function vnoise(x: number, y: number, z: number) {
 
 /** Relief offset in mm (outward positive) at height t and angle θ for a wall of base radius R. */
 /** Cumulative cell rows from the base up to height fraction t: ∫ n / (2πR) · ds along the side profile. Cached per shape. */
-let rowKey = '', rowTab: Float64Array = new Float64Array(0);
+let rowKey = NaN, rowTab: Float64Array = new Float64Array(0);
 function cellRows(d: Design, t: number, n: number): number {
-  const key = `${d.height}|${d.maxDiameter}|${d.narrowTop}|${d.smoothing}|${n}|${JSON.stringify(d.profile)}`;
+  // cheap numeric fingerprint of everything the table depends on (this runs for every relief sample)
+  let key = d.height * 1.000003 + d.maxDiameter * 7.13 + d.narrowTop * 131.7 + d.smoothing * 977.1 + n * 3.7 + d.profile.length * 11.9;
+  for (let i = 0; i < d.profile.length; i++) key += d.profile[i].r * (13.37 + i * 5.1) + d.profile[i].t * (71.3 + i * 3.3);
   const N = 1024;
   if (key !== rowKey) {
     rowKey = key; rowTab = new Float64Array(N + 1);
@@ -208,6 +210,8 @@ export function relief(d: Design, t: number, th: number, R: number): number {
       } else {
         const p = patternById(rl.kind); if (!p) return 0;
         setEdge(rl.edge ?? 0.15);
+        // pattern lines at least ~1.6 mm wide on the real surface (4 nozzle widths): crisp to print and to mesh
+        setMinLine(1.1 / Math.max(1, cell));   // a ridge comes out ~1.5 × this: ≈1.6 mm
         f = clamp(p.fn(uu, vv, rl.seed ?? 1), 0, 1);
       }
       if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1);
@@ -232,6 +236,26 @@ export function makeSurface(d: Design) {
     const a = th - tw * twistEase(d, t);
     const side = d.relief.side ?? 'outside';
     return Math.max(1, R * sectionMul(d, a) + (side !== 'inside' ? relief(d, t, a, R) : 0));
+  };
+}
+
+/** The face split into the plain shape and the relief offset (fast meshing: the relief is evaluated once
+ *  per point and reused for both the position and the edge tracing). face radius = plain ± relief. */
+export function surfaceParts(d: Design, face: 'outer' | 'inner') {
+  const pts = sortedProfile(d), Rmax = d.maxDiameter / 2, tw = (d.twist * Math.PI) / 180;
+  const side = d.relief.side ?? 'outside';
+  const on = d.relief.kind !== 'smooth' && d.relief.depth !== 0 && (face === 'outer' ? side !== 'inside' : side !== 'outside');
+  let lastT = NaN, lastR = 0, lastTw = 0;
+  const row = (z: number) => { const t = clamp(z / d.height, 0, 1); if (t !== lastT) { lastT = t; lastR = profileR(d, t, pts) * Rmax * (1 - d.narrowTop * t); lastTw = tw * twistEase(d, t); } return t; };
+  return {
+    on,
+    /** relief offset at (z, θ): + outward on the outer face, + into the cavity on the inner face */
+    rel: (z: number, th: number) => { if (!on) return 0; const t = row(z); return relief(d, t, th - lastTw, lastR); },
+    /** face radius given the relief offset */
+    radius: (z: number, th: number, rel: number) => {
+      row(z); const b = lastR * sectionMul(d, th - lastTw);
+      return face === 'outer' ? Math.max(1, b + rel) : Math.max(0.5, b - d.wall - rel);
+    },
   };
 }
 
