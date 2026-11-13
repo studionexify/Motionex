@@ -1316,7 +1316,7 @@ function reliefIcon(id: string) {
     const n = Math.max(1, r?.count ?? 12), R = 50, cell = (Math.PI * 2 * R) / n;
     const d = { ...defaultDesign('vase'), height: cell * 2, relief: { kind: id, count: n, depth: 1, start: 0, end: 1, transition: 0.001 } } as Design;
     const vals = new Float32Array(W * H); let lo = Infinity, hi = -Infinity;
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = reliefAt(d, 1 - (y + 0.5) / H, ((x + 0.5) / W) * (Math.PI * 2) * (3 / n), R); vals[y * W + x] = v; lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = reliefAt(d, 1 - (y + 0.5) / H, ((x + 0.5) / W) * (Math.PI * 2) * (3 / n), R, true); vals[y * W + x] = v; lo = Math.min(lo, v); hi = Math.max(hi, v); }
     const img = g.createImageData(W, H);
     for (let i = 0; i < W * H; i++) { const t = hi > lo ? (vals[i] - lo) / (hi - lo) : 0.5; const c = 95 + t * 140; img.data[i * 4] = c; img.data[i * 4 + 1] = c * 0.97; img.data[i * 4 + 2] = c * 0.93; img.data[i * 4 + 3] = 255; }
     g.putImageData(img, 0, 0);

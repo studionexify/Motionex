@@ -3,13 +3,14 @@
 // sampled at a fraction of a millimetre with their outlines traced exactly, flat stretches are merged,
 // and normals are smooth across curves but split at real creases (> 25°), so edges read sharp.
 import { surfaceGrid, triangulate } from './surfacegrid';
+import { faceMesh } from './tessellate';
 import { surfaceParts, type Design } from './design';
 
 export type MeshQuality = 'quick' | 'view' | 'export';
 const SPEC: Record<MeshQuality, { relief: number; plainRow: number; minCols: number; maxVerts: number; snap: boolean; levels?: number[]; finest: number; perFeature: number; smooth?: boolean }> = {
   // quick: still traced (no staircase), just coarser — the fast preview while editing
-  quick: { relief: 1.1, plainRow: 2.5, minCols: 480, maxVerts: 100_000, snap: true, levels: [0.5], finest: 1.1, perFeature: 1, smooth: true },
-  view: { relief: 0.6, plainRow: 1.0, minCols: 1440, maxVerts: 900_000, snap: true, levels: [0.15, 0.85], finest: 0.22, perFeature: 4 },
+  quick: { relief: 1.0, plainRow: 2.5, minCols: 480, maxVerts: 200_000, snap: true, levels: [0.5], finest: 0.6, perFeature: 2.2, smooth: true },
+  view: { relief: 0.6, plainRow: 1.0, minCols: 1440, maxVerts: 700_000, snap: true, levels: [0.15, 0.85], finest: 0.3, perFeature: 4 },
   export: { relief: 0.3, plainRow: 0.6, minCols: 1440, maxVerts: 2_400_000, snap: true, levels: [0.15, 0.85], finest: 0.15, perFeature: 4 },
 };
 
@@ -59,37 +60,44 @@ export interface BuiltMesh {
 export function buildMesh(d: Design, q: MeshQuality): BuiltMesh {
   // both faces share the angular division (the rim joins them point for point)
   const o = gridSize(d, q, 'outer'), i2 = gridSize(d, q, 'inner'), cols = Math.max(o.cols, i2.cols);
-  const go = surfaceGrid(d, o.rows, cols, 'outer', SPEC[q].snap, SPEC[q].levels), gi = surfaceGrid(d, i2.rows, cols, 'inner', SPEC[q].snap, SPEC[q].levels);
   const W = cols + 1, G = (o.rows + 1) * W, G2 = (i2.rows + 1) * W;
   const floor = d.openBottom ? 0 : Math.min(d.height * 0.3, d.wall * 0.6 + 1.2);
-  const pos = new Float32Array((G + G2 + 2) * 3);
-  pos.set(go.pos, 0); pos.set(gi.pos, G * 3);
-  if (!d.openBottom) for (let k = G * 3; k < (G + G2) * 3; k += 3) pos[k + 2] = Math.max(pos[k + 2], floor);
-  const cBot = G + G2, cFloor = cBot + 1;
-  pos[cBot * 3 + 2] = 0; pos[cFloor * 3 + 2] = floor;
   const eps = Math.max(1e-4, Math.abs(d.relief.depth) * 0.002);
   // flat stretches: largest block whose fan stays within 0.02 mm of the true surface (chord ≤ √(8·R·tol))
   const Rmin = Math.max(5, (d.maxDiameter / 2) * 0.5), blockMM = Math.min(8, Math.sqrt(8 * Rmin * 0.02) * 1.4);
   const C = (2 * Math.PI * d.maxDiameter / 2) / cols;
-  let idx: number[] = [];
-  const parts: Uint32Array[] = [];
-  const push = (a: Uint32Array) => { parts.push(a); };
-  push(triangulate(go, d.height / o.rows, C, eps, false, 0, blockMM));
-  push(triangulate(gi, d.height / i2.rows, C, eps, true, G, blockMM));
-  const topO = o.rows * W, topI = G + i2.rows * W;
+  // each face: exact edge-cut tessellation for sharp reliefs, otherwise the smooth grid mesher
+  const face = (f: 'outer' | 'inner', rows: number, flip: boolean) => {
+    const fm = faceMesh(d, rows, cols, f, blockMM, flip);
+    if (fm) return fm;
+    const g = surfaceGrid(d, rows, cols, f, false);
+    const Gf = (rows + 1) * W, srcf = new Uint32Array(Gf); for (let k = 0; k < Gf; k++) srcf[k] = k;
+    return { pos: g.pos, idx: triangulate(g, d.height / rows, C, eps, flip, 0, blockMM), src: srcf, G: Gf };
+  };
+  const fo = face('outer', o.rows, false), fi = face('inner', i2.rows, true);
+  const No = fo.pos.length / 3, Ni = fi.pos.length / 3, cBot = No + Ni, cFloor = cBot + 1;
+  const pos = new Float32Array((No + Ni + 2) * 3);
+  pos.set(fo.pos, 0); pos.set(fi.pos, No * 3);
+  if (!d.openBottom) for (let k = No * 3; k < (No + Ni) * 3; k += 3) pos[k + 2] = Math.max(pos[k + 2], floor);
+  pos[cBot * 3 + 2] = 0; pos[cFloor * 3 + 2] = floor;
+  const rest: number[] = [];
+  const topO = o.rows * W, topI = No + i2.rows * W;
   for (let j = 0; j < cols; j++) {
-    idx.push(topO + j, topO + j + 1, topI + j + 1, topO + j, topI + j + 1, topI + j);     // rim
-    if (d.openBottom) idx.push(j, G + j + 1, j + 1, j, G + j, G + j + 1);
-    else idx.push(cBot, j + 1, j, cFloor, G + j, G + j + 1);
+    rest.push(topO + j, topO + j + 1, topI + j + 1, topO + j, topI + j + 1, topI + j);     // rim
+    if (d.openBottom) rest.push(j, No + j + 1, j + 1, j, No + j, No + j + 1);
+    else rest.push(cBot, j + 1, j, cFloor, No + j, No + j + 1);
   }
-  { const rest = Uint32Array.from(idx); parts.push(rest); }
-  let total = 0; for (const p of parts) total += p.length;
-  const src = new Uint32Array(total); { let o = 0; for (const p of parts) { src.set(p, o); o += p.length; } }
-  idx = [];
-  const { position, normal } = creasedNormals(pos, src, Math.cos(((SPEC[q].smooth ? 70 : 25) * Math.PI) / 180));
+  const idx = new Uint32Array(fo.idx.length + fi.idx.length + rest.length);
+  idx.set(fo.idx, 0);
+  for (let k = 0; k < fi.idx.length; k++) idx[fo.idx.length + k] = fi.idx[k] + No;
+  idx.set(rest, fo.idx.length + fi.idx.length);
+  const { position, normal } = creasedNormals(pos, idx, Math.cos((25 * Math.PI) / 180));
+  // per corner: the grid point it belongs to (for painting rule colours)
+  const src = new Uint32Array(idx.length);
+  for (let k = 0; k < idx.length; k++) { const v = idx[k]; src[k] = v < No ? fo.src[v] : v < No + Ni ? G + fi.src[v - No] : G + G2 + (v - No - Ni); }
   return {
     position, normal, src,
-    outer: { rows: o.rows, cols, pos: go.pos }, inner: { rows: i2.rows, cols }, triangles: src.length / 3,
+    outer: { rows: o.rows, cols, pos: fo.pos.subarray(0, G * 3) }, inner: { rows: i2.rows, cols }, triangles: idx.length / 3,
   };
 }
 

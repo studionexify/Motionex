@@ -33,56 +33,40 @@ export function surfaceGrid(d: Design, rows: number, cols: number, face: 'outer'
   if (snap && hasRelief) {
     // Trace the foot, the middle and the top of every slope (three levels), each onto its own grid points,
     // so the whole bevel — not just its centre line — follows the pattern's true outline.
-    // Points next to a pattern edge are projected straight onto it (along the local slope direction, in
-    // millimetres on the surface), to whichever traced level — foot, middle or top of the bevel — is
-    // nearest. Projection spaces the points evenly along every edge, straight or diagonal, and inside a
-    // thin line each point goes to the edge on its own side.
-    const R0 = d.maxDiameter / 2, dzc = H / rows, duc = (TAU * R0) / cols, cell = Math.min(dzc, duc);
-    const isos = levels.map((l) => lo + (hi - lo) * l);
-    const f0 = f.slice();   // levels before any point moves (for the local range)
-    const scan = levels.length > 1 ? 6 : 4, iters = levels.length > 1 ? 7 : 5;
-    const cand = new Uint8Array(N);
-    for (let i = 0; i <= rows; i++) for (let j = 0; j <= cols; j++) {
-      const k = i * W + j; let mn = f[k], mx = f[k];
-      if (j > 0) { mn = Math.min(mn, f[k - 1]); mx = Math.max(mx, f[k - 1]); } if (j < cols) { mn = Math.min(mn, f[k + 1]); mx = Math.max(mx, f[k + 1]); }
-      if (i > 0) { mn = Math.min(mn, f[k - W]); mx = Math.max(mx, f[k - W]); } if (i < rows) { mn = Math.min(mn, f[k + W]); mx = Math.max(mx, f[k + W]); }
-      for (const v of isos) if (mn < v && mx > v) { cand[k] = 1; break; }
-    }
-    const lv = (z: number, u: number) => level(z, u / R0);
-    for (let i = 0; i <= rows; i++) for (let j = 0; j < cols; j++) {
-      const k = i * W + j; if (!cand[k]) continue;
-      const z0 = zs[k], u0 = ths[k] * R0, h = cell * 0.35, edgeRow = i === 0 || i === rows;
-      let gz = edgeRow ? 0 : (lv(z0 + h, u0) - lv(z0 - h, u0)) / (2 * h);
-      const gu = (lv(z0, u0 + h) - lv(z0, u0 - h)) / (2 * h);
-      const gl = Math.hypot(gz, gu); if (gl < 1e-9) continue;
-      const dz = gz / gl, du = gu / gl, reach = cell * 0.6;
-      // foot and top measured against this spot's own low and high (thin lines never reach full height)
-      let llo = Infinity, lhi = -Infinity;
-      for (let di = -2; di <= 2; di++) for (let dj = -2; dj <= 2; dj++) { const ii = i + di, jj = (j + dj + cols) % cols; if (ii < 0 || ii > rows) continue; const v = f0[ii * W + jj]; if (v < llo) llo = v; if (v > lhi) lhi = v; }
-      const localIsos = lhi - llo > (hi - lo) * 0.15 ? levels.map((l) => llo + (lhi - llo) * l) : isos;
-      let best = Infinity, bz = z0, bu = u0;
-      for (const iso of localIsos) {
-        const g0 = lv(z0, u0) - iso;
-        // walk out both ways to the first sign change, then bisect
-        for (const sgn of [1, -1]) {
-          let prevT = 0, prevV = g0;
-          for (let st = 1; st <= scan; st++) {
-            const t = (sgn * reach * st) / scan, v = lv(z0 + dz * t, u0 + du * t) - iso;
-            if (v * prevV <= 0) {
-              let a = prevT, b = t, fa = prevV;
-              for (let it = 0; it < iters; it++) { const m = (a + b) / 2, fm = lv(z0 + dz * m, u0 + du * m) - iso; if (fm * fa > 0) { a = m; fa = fm; } else b = m; }
-              const tt = (a + b) / 2;
-              if (Math.abs(tt) < best) { best = Math.abs(tt); bz = z0 + dz * tt; bu = u0 + du * tt; }
-              break;
-            }
-            prevT = t; prevV = v;
+    // Sharp reliefs: every vertex near an edge is moved exactly onto the nearest bevel line (top or foot of a
+    // straight bevel, sd = ∓bevel/2), by Newton steps on the true signed distance (|∇sd| = 1, so one or two
+    // steps land within microns). Edges come out as clean as the geometry they come from.
+    const R0 = d.maxDiameter / 2, cell = Math.min(H / rows, (TAU * R0) / cols);
+    const probe = [0.2, 0.5, 0.8].some((t) => parts.edges(H * t, 0.3));
+    if (probe) {
+      const hstep = 0.04;
+      for (let i = 0; i <= rows; i++) {
+        const fixedZ = i === 0 || i === rows;
+        for (let j = 0; j < cols; j++) {
+          const k = i * W + j; let z = zs[k], th = ths[k];
+          const e0 = parts.edges(z, th); if (!e0) continue;
+          const Rz = Math.max(1, R0);
+          // nearest bevel line among all levels
+          let best = Infinity, lv = -1, iso = 0;
+          for (let l = 0; l < e0.sd.length; l++) for (const s of [-e0.bev / 2, e0.bev / 2]) { const c = Math.abs(e0.sd[l] - s); if (c < best) { best = c; lv = l; iso = s; } }
+          if (lv < 0 || best > cell * 0.75) continue;
+          for (let it = 0; it < 3; it++) {
+            const e = parts.edges(z, th); if (!e) break;
+            const c = e.sd[lv] - iso; if (Math.abs(c) < 1e-4) break;
+            const ez1 = fixedZ ? null : parts.edges(z + hstep, th), ez0 = fixedZ ? null : parts.edges(z - hstep, th);
+            const eu1 = parts.edges(z, th + hstep / Rz), eu0 = parts.edges(z, th - hstep / Rz);
+            if (!eu1 || !eu0) break;
+            const gz = ez1 && ez0 ? (ez1.sd[lv] - ez0.sd[lv]) / (2 * hstep) : 0, gu = (eu1.sd[lv] - eu0.sd[lv]) / (2 * hstep);
+            const g2 = gz * gz + gu * gu; if (g2 < 1e-6) break;
+            let sz = (c * gz) / g2, su = (c * gu) / g2; const m = Math.hypot(sz, su);
+            if (m > cell) { sz *= cell / m; su *= cell / m; }
+            z -= sz; th -= su / Rz;
           }
+          if (!fixedZ) zs[k] = Math.min(H, Math.max(0, z));
+          ths[k] = th; moved[k] = 1;
+          rv[k] = parts.rel(zs[k], ths[k]); f[k] = Math.abs(rv[k]);
         }
       }
-      if (best === Infinity) continue;
-      if (!edgeRow) zs[k] = bz;
-      ths[k] = bu / R0; moved[k] = 1;
-      rv[k] = parts.rel(zs[k], ths[k]); f[k] = Math.abs(rv[k]);
     }
     // the seam column (2π) mirrors column 0
     for (let i = 0; i <= rows; i++) { const a = i * W, b = a + cols; zs[b] = zs[a]; ths[b] = ths[a] + TAU; f[b] = f[a]; rv[b] = rv[a]; }

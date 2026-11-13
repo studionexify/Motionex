@@ -18,6 +18,7 @@ export interface Relief {
   /** Edge softness 0 (knife-sharp) … 1 (rounded). */
   edge?: number;
 }
+import { bevelH, geoSd, mapGeo, patternGeo, type Geo } from './patterngeo';
 import { PATTERNS, patternById, sampleMapCubic, sampleMapVector, setEdge, setMinLine, type HeightMap } from './reliefs';
 export type TwistShape = 'linear' | 's' | 'wave';
 
@@ -173,7 +174,7 @@ function cellRows(d: Design, t: number, n: number): number {
   return rowTab[i] + (rowTab[i + 1] - rowTab[i]) * f;
 }
 
-export function relief(d: Design, t: number, th: number, R: number): number {
+export function relief(d: Design, t: number, th: number, R: number, raw = false): number {
   const rl = d.relief;
   if (rl.kind === 'smooth' || rl.depth === 0) return 0;
   const tr = Math.max(1e-3, rl.transition);
@@ -202,17 +203,17 @@ export function relief(d: Design, t: number, th: number, R: number): number {
       // pattern library / imported height map
       const vv = v / Math.max(0.1, rl.aspect ?? 1);
       const uu = u + vv * Math.tan(((rl.slant ?? 0) * Math.PI) / 180) + Math.floor(vv) * (rl.rowShift ?? 0);
+      const gp = geoOf(d, cell, raw);
       if (rl.kind === 'image') {
         if (!rl.map) return 0;
         setEdge(rl.edge ?? 0.15);
         const y = rl.mapMode === 'band' ? 1 - frac(clamp((t - rl.start) / Math.max(1e-3, rl.end - rl.start), 0, 0.9999) * Math.max(1, rl.tilesUp ?? 1)) : 1 - frac(vv);
-        f = rl.mapVector === false ? sampleMapCubic(rl.map, uu, y) : sampleMapVector(rl.map, uu, y);
+        if (gp) f = geoHeight(gp, uu, y, cell, bevelOf(rl, cellMaxOf(d)));
+        else f = rl.mapVector === false ? sampleMapCubic(rl.map, uu, y) : sampleMapVector(rl.map, uu, y);
       } else {
         const p = patternById(rl.kind); if (!p) return 0;
-        setEdge(rl.edge ?? 0.15);
-        // pattern lines at least ~1.6 mm wide on the real surface (4 nozzle widths): crisp to print and to mesh
-        setMinLine(1.1 / Math.max(1, cell));   // a ridge comes out ~1.5 × this: ≈1.6 mm
-        f = clamp(p.fn(uu, vv, rl.seed ?? 1), 0, 1);
+        if (gp) f = geoHeight(gp, uu, vv, cell, bevelOf(rl, cellMaxOf(d)));
+        else f = clamp(p.fn(uu, vv, rl.seed ?? 1), 0, 1);
       }
       if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1);
       if (rl.invert) f = 1 - f;
@@ -251,6 +252,8 @@ export function surfaceParts(d: Design, face: 'outer' | 'inner') {
     on,
     /** relief offset at (z, θ): + outward on the outer face, + into the cavity on the inner face */
     rel: (z: number, th: number) => { if (!on) return 0; const t = row(z); return relief(d, t, th - lastTw, lastR); },
+    /** signed distances to the relief's sharp edges (mm), or null */
+    edges: (z: number, th: number) => { if (!on) return null; const t = row(z); return reliefEdges(d, t, th - lastTw, lastR); },
     /** face radius given the relief offset */
     radius: (z: number, th: number, rel: number) => {
       row(z); const b = lastR * sectionMul(d, th - lastTw);
@@ -343,4 +346,54 @@ export function meshGrid(d: Design, maxVerts = 600_000, quick = false) {
   if (k < 1) { cols = Math.max(96, Math.floor(cols * k)); rows = Math.max(40, Math.floor(rows * k)); }
   if (quick) { cols = Math.max(96, cols >> 1); rows = Math.max(40, rows >> 1); }
   return { rows, cols };
+}
+
+// ── exact pattern geometry (see patterngeo.ts)
+/** Bevel width in mm from the edge-softness setting: 0 → 0.25 mm (crisp), 1 → 1.75 mm; never over 30 % of a cell. */
+export const bevelOf = (rl: Relief, cellMax: number) => Math.min(cellMax * 0.3, 0.25 + 1.5 * (rl.edge ?? 0.15));
+const cellMaxOf = (d: Design) => (TAU * d.maxDiameter / 2) / Math.max(1, Math.round(d.relief.count));
+/** Sharp-pattern geometry for this relief, or null for smooth patterns / thumbnails. */
+let memo: { rl: Relief | null; kind: string; seed: number; edge: number; vec: boolean; map: unknown; maxD: number; n: number; g: Geo | null; minW: number } =
+  { rl: null, kind: '', seed: 0, edge: 0, vec: true, map: null, maxD: 0, n: 0, g: null, minW: 0 };
+function geoOf(d: Design, _cell: number, raw: boolean): Geo | null {
+  const rl = d.relief;
+  if (raw) return null;
+  // one geometry per piece: line widths are fixed from the widest cell, so every row shares it
+  const n = Math.max(1, Math.round(rl.count)), edge = rl.edge ?? 0.15, seed = rl.seed ?? 1, vec = rl.mapVector !== false;
+  const m = memo;
+  if (m.rl === rl && m.kind === rl.kind && m.seed === seed && m.edge === edge && m.vec === vec && m.map === rl.map && m.maxD === d.maxDiameter && m.n === n) {
+    if (rl.kind !== 'image') { setEdge(edge); setMinLine(m.minW); }
+    return m.g;
+  }
+  const cellMax = (TAU * d.maxDiameter / 2) / n, minW = 1.1 / Math.max(1, cellMax);
+  let g: Geo | null = null;
+  if (rl.kind === 'image') g = rl.map && vec ? mapGeo(rl.map) : null;
+  else {
+    // pattern lines at least ~1.6 mm wide on the real surface (4 nozzle widths): crisp to print and to mesh
+    setEdge(edge); setMinLine(minW);
+    const pg = patternGeo(rl.kind, seed, `${minW.toFixed(4)}|${edge}`);
+    g = pg && pg.sharp ? pg : null;
+  }
+  memo = { rl, kind: rl.kind, seed, edge, vec, map: rl.map, maxD: d.maxDiameter, n, g, minW };
+  return g;
+}
+function geoHeight(g: Geo, u: number, v: number, cell: number, bev: number) {
+  let f = g.base;
+  for (const lv of g.levels) f += lv.step * bevelH(geoSd(g, lv, u, v) * cell, bev);
+  return f;
+}
+/** Signed distances (mm) to every edge of a sharp relief at (t, θ), and the bevel width; null when the relief
+ *  has no sharp edges. The mesher snaps vertices onto sd = ±bevel/2. */
+export function reliefEdges(d: Design, t: number, th: number, R: number): { sd: number[]; bev: number } | null {
+  const rl = d.relief;
+  if (rl.kind === 'smooth' || rl.depth === 0) return null;
+  const tr = Math.max(1e-3, rl.transition);
+  if (clamp((t - rl.start) / tr, 0, 1) * clamp((rl.end - t) / tr, 0, 1) <= 0) return null;
+  const n = Math.max(1, Math.round(rl.count)), cell = (TAU * R) / n;
+  const gp = geoOf(d, cell, false); if (!gp) return null;
+  const u = (th / TAU) * n, v = cellRows(d, t, n);
+  const vv = v / Math.max(0.1, rl.aspect ?? 1);
+  const uu = u + vv * Math.tan(((rl.slant ?? 0) * Math.PI) / 180) + Math.floor(vv) * (rl.rowShift ?? 0);
+  const y = rl.kind !== 'image' ? vv : rl.mapMode === 'band' ? 1 - frac(clamp((t - rl.start) / Math.max(1e-3, rl.end - rl.start), 0, 0.9999) * Math.max(1, rl.tilesUp ?? 1)) : 1 - frac(vv);
+  return { sd: gp.levels.map((lv) => geoSd(gp, lv, uu, y) * cell), bev: bevelOf(rl, cellMaxOf(d)) };
 }

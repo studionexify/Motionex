@@ -50,6 +50,8 @@ function hex(x: number, y: number) {
   const dx = x - cx, dy = y - cy, ax = Math.abs(dx), ay2 = Math.abs(dy);
   return { hd: Math.max(ax, ax * 0.5 + ay2 * (r3 / 2)), cx, cy, dx, dy };
 }
+/** Exact distance from a point to the nearest of n straight lines through the centre (every π/n). */
+const radial = (x: number, y: number, n: number) => { const step = Math.PI / n, a = Math.atan2(y, x); return Math.hypot(x, y) * Math.abs(Math.sin(a - Math.round(a / step) * step)); };
 const circ = (x: number, y: number) => Math.hypot(x, y);
 const local = (u: number, v: number) => [fr(u) - 0.5, fr(v) - 0.5];
 
@@ -59,7 +61,7 @@ const P = (group: string, list: [string, string, number, number, Field, boolean?
 export const PATTERNS: Pattern[] = [
   ...P('Japan', [
     ['seigaiha', 'Seigaiha waves', 14, 1.2, (u, v) => { const row = Math.floor(v * 2); const x = u + (row % 2) * 0.5, y = v * 2; let best = 0; for (const dy of [0, 1]) { const cy = Math.floor(y) + dy, cx = Math.round(x - ((cy % 2 + 2) % 2) * 0.5) + ((cy % 2 + 2) % 2) * 0.5; const r = circ(x - cx, (y - cy) * 0.5) * 2; if (y - cy <= 0.05) best = Math.max(best, r < 1 ? 0.35 + 0.65 * tri(r * 3) : 0); } return best; }],
-    ['asanoha', 'Asanoha hemp leaf', 12, 1, (u, v) => { const h = hex(u, v); const a = Math.atan2(h.dy, h.dx); const sp = Math.abs(Math.sin(a * 3)) * Math.hypot(h.dx, h.dy); const s6 = Math.abs(Math.sin(a * 6)) * Math.hypot(h.dx, h.dy); return Math.max(line(sp, 0.06), line(s6, 0.05), line(0.5 - h.hd, 0.08)); }],
+    ['asanoha', 'Asanoha hemp leaf', 12, 1, (u, v) => { const h = hex(u, v); const a = Math.atan2(h.dy, h.dx); const sp = radial(h.dx, h.dy, 3); const s6 = radial(h.dx, h.dy, 6); return Math.max(line(sp, 0.06), line(s6, 0.05), line(0.5 - h.hd, 0.08)); }],
     ['kikko', 'Kikkō tortoise shell', 12, 1.2, (u, v) => { const h = hex(u, v); return ss(0.38, 0.46, 0.5 - Math.abs(0.5 - h.hd) + 0.0) * 0 + (1 - ss(0.36, 0.48, h.hd)) * 0.8 + line(0.5 - h.hd, 0.05) * 0.2; }],
     ['shippo', 'Shippō circles', 12, 1, (u, v) => { const [x, y] = local(u, v); const r1 = circ(x, y), r2 = circ(fr(u) - (fr(u) > 0.5 ? 1 : 0), fr(v) - (fr(v) > 0.5 ? 1 : 0)); return Math.max(line(r1 - 0.5 / Math.SQRT2 * 1.0, 0.07), line(r2 - 0.5, 0.07)); }],
     ['yagasuri', 'Yagasuri arrows', 16, 1, (u, v) => { const col = Math.floor(u); const y = fr(v + (col % 2) * 0.5); const x = fr(u) - 0.5; return cl(1 - Math.abs(y - 0.5 - Math.abs(x) * 0.8) * 4) * (Math.abs(x) < 0.45 ? 1 : 0); }],
@@ -82,7 +84,7 @@ export const PATTERNS: Pattern[] = [
   ...P('Islamic & Moorish', [
     ['khatam', 'Eight-point star (khatam)', 10, 1.2, (u, v) => { const [x, y] = local(u, v); const a = Math.max(Math.abs(x), Math.abs(y)), b = (Math.abs(x) + Math.abs(y)) / Math.SQRT2; const st = Math.min(a, b); return Math.max(1 - ss(0.3, 0.33, st), line(st - 0.4, 0.05)); }],
     ['zellige', 'Zellige stars & crosses', 10, 1, (u, v) => { const [x, y] = local(u, v); const st = Math.min(Math.max(Math.abs(x), Math.abs(y)), (Math.abs(x) + Math.abs(y)) / Math.SQRT2); return Math.max(line(st - 0.3, 0.06), line(Math.max(Math.abs(x), Math.abs(y)) - 0.48, 0.05)) + (st < 0.3 ? 0.35 : 0); }],
-    ['girih', 'Girih ten-fold', 8, 1.2, (u, v) => { const [x, y] = local(u, v); const a = Math.atan2(y, x), r = circ(x, y); const star = r * Math.cos(((a % (TAU / 10)) + TAU) % (TAU / 10) - TAU / 20); return Math.max(line(star - 0.32, 0.05), line(r * Math.abs(Math.sin(a * 5)), 0.04) * (r < 0.32 ? 1 : 0), line(Math.max(Math.abs(x), Math.abs(y)) - 0.5, 0.05)); }],
+    ['girih', 'Girih ten-fold', 8, 1.2, (u, v) => { const [x, y] = local(u, v); const a = Math.atan2(y, x), r = circ(x, y); const star = r * Math.cos(((a % (TAU / 10)) + TAU) % (TAU / 10) - TAU / 20); return Math.max(line(star - 0.32, 0.05), line(radial(x, y, 5), 0.04) * (r < 0.32 ? 1 : 0), line(Math.max(Math.abs(x), Math.abs(y)) - 0.5, 0.05)); }],
     ['mashrabiya', 'Mashrabiya screen', 14, 1.2, (u, v) => { const [x, y] = local(u, v); const d = Math.min(Math.abs(Math.abs(x) - Math.abs(y)), Math.abs(x), Math.abs(y)); return Math.max(line(d, 0.12), 1 - ss(0.1, 0.16, circ(x, y))); }],
     ['trellis', 'Moroccan trellis', 10, 1.2, (u, v) => { const x = fr(u) - 0.5, y = fr(v * 0.8) - 0.5; const lobe = Math.min(circ(Math.abs(x) - 0.5, y) , circ(x, Math.abs(y) - 0.5)); return line(lobe - 0.35, 0.08); }],
     ['muqarnas', 'Muqarnas cells', 12, 1.6, (u, v) => { const row = Math.floor(v); const x = fr(u + row * 0.5) - 0.5, y = fr(v); return cl(Math.sqrt(cl(1 - (2 * x) ** 2)) * (0.3 + 0.7 * y)); }],
