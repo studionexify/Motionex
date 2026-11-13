@@ -35,17 +35,16 @@ function voro(x: number, y: number, s: number, jit = 0.85) {
   }
   return { d1, d2, id };
 }
-/** Hex grid: distance from the cell centre in hex metric (0 centre … 0.5 edge) and the centre. */
+/** Exact hexagonal tiling (pointy-top, neighbouring centres 1 apart). hd: hex distance from the cell centre,
+ *  0 at the centre … 0.5 on the cell edge; cx, cy the centre; dx, dy the offset from it. */
 function hex(x: number, y: number) {
-  const r3 = Math.sqrt(3);
-  const ax = x, ay = y * 2 / r3;
-  const q1x = Math.round(ax), q1y = Math.round(ay / 2) * 2;
-  const q2x = Math.round(ax - 0.5) + 0.5, q2y = Math.round((ay - 1) / 2) * 2 + 1;
-  const d1 = Math.hypot(ax - q1x, (ay - q1y) * r3 / 2), d2 = Math.hypot(ax - q2x, (ay - q2y) * r3 / 2);
-  const [cx, cy] = d1 < d2 ? [q1x, q1y * r3 / 2] : [q2x, q2y * r3 / 2];
-  const dx = Math.abs(x - cx), dy = Math.abs(y - cy);
-  const hd = Math.max(dx * r3 / 2 + dy / 2, dy) / (r3 / 2) * 0.5 / 0.5; // 0..~0.577
-  return { hd: hd / (1 / r3) * 0.5, cx, cy, dx: x - cx, dy: y - cy };
+  const r3 = Math.sqrt(3), ay = y / r3;
+  const c1x = Math.round(x), c1y = Math.round(ay) * r3;
+  const c2x = Math.floor(x) + 0.5, c2y = (Math.floor(ay) + 0.5) * r3;
+  const d1 = (x - c1x) ** 2 + (y - c1y) ** 2, d2 = (x - c2x) ** 2 + (y - c2y) ** 2;
+  const cx = d1 <= d2 ? c1x : c2x, cy = d1 <= d2 ? c1y : c2y;
+  const dx = x - cx, dy = y - cy, ax = Math.abs(dx), ay2 = Math.abs(dy);
+  return { hd: Math.max(ax, ax * 0.5 + ay2 * (r3 / 2)), cx, cy, dx, dy };
 }
 const circ = (x: number, y: number) => Math.hypot(x, y);
 const local = (u: number, v: number) => [fr(u) - 0.5, fr(v) - 0.5];
@@ -117,7 +116,7 @@ export const PATTERNS: Pattern[] = [
     ['persian', 'Persian medallion', 6, 1.2, (u, v) => { const [x, y] = local(u, v * 0.7); const d = Math.abs(x) + Math.abs(y); return Math.max(line(d - 0.42, 0.06), line(d - 0.3, 0.04), d < 0.15 ? 1 : 0, line(circ(x, y) - 0.2, 0.05)); }],
   ]),
   ...P('Americas & Pacific', [
-    ['xicalcoliuhqui', 'Stepped fret', 10, 1.2, (u, v) => { const x = fr(u) * 4, y = fr(v) * 4; const step = Math.floor(x) <= Math.floor(y) ? 1 : 0; return Math.floor(y) === 0 || Math.floor(x) === 3 ? 1 : step * 0.7 + 0.1; }],
+    ['xicalcoliuhqui', 'Stepped fret', 10, 1.2, (u, v) => { const x = Math.floor(fr(u) * 6), y = Math.floor(fr(v) * 6); const stair = x - y === 0 || x - y === 1; const hook = (y === 5 && x <= 1) || (x === 0 && y >= 4); return stair || hook ? 1 : 0.1; }],
     ['zapotec', 'Zapotec diamond steps', 10, 1, (u, v) => { const [x, y] = local(u, v); const d = Math.floor((Math.abs(x) + Math.abs(y)) * 8) / 8; return fr(d * 4) < 0.5 ? 1 : 0.2; }],
     ['navajo', 'Eye-dazzler', 10, 1, (u, v) => { const [x, y] = local(u, v); return fr((Math.abs(x) + Math.abs(y)) * 6) < 0.5 ? 1 : 0.15; }],
     ['koru', 'Koru spirals', 8, 1.2, (u, v) => { const [x, y] = local(u, v); const a = Math.atan2(y, x), r = circ(x, y); return r < 0.46 ? line(fr(r * 5 + a / TAU) - 0.5, 0.35) : 0.1; }],
@@ -174,7 +173,7 @@ export const PATTERNS: Pattern[] = [
     ['argyle', 'Argyle', 8, 0.8, (u, v) => { const x = fr(u) - 0.5, y = fr(v * 0.7) - 0.5; const d = Math.abs(x) + Math.abs(y); return Math.max(d < 0.5 ? 0.7 : 0.2, line(fr(u + v * 0.7) - 0.5, 0.05), line(fr(u - v * 0.7) - 0.5, 0.05)); }],
     ['polka', 'Polka dots', 12, 1, (u, v) => { const row = Math.floor(v); const [x, y] = local(u + row * 0.5, v); return 1 - ss(0.2, 0.25, circ(x, y)); }],
     ['tweed', 'Tweed', 30, 0.5, (u, v, s) => line(fr(u * 2 + (Math.floor(v * 4) % 2) * 0.5) - 0.5, 0.5) * (0.7 + 0.3 * noise2(u * 8, v * 8, s)), true],
-    ['crochet', 'Crochet granny', 8, 1.2, (u, v) => { const [x, y] = local(u, v); const sq = Math.max(Math.abs(x), Math.abs(y)); return line(fr(sq * 5) - 0.5, 0.35) * (1 - ss(0.0, 0.05, Math.min(Math.abs(Math.abs(x) - Math.abs(y)), 1))); }],
+    ['crochet', 'Crochet granny', 8, 1.2, (u, v) => { const [x, y] = local(u, v); const sq = Math.max(Math.abs(x), Math.abs(y)); return sq > 0.46 ? 0.2 : line(fr(sq * 5 + 0.25) - 0.5, 0.45); }],
     ['denimtwill', 'Twill', 30, 0.5, (u, v) => line(fr(u + v) - 0.5, 0.5)],
     ['lace', 'Lace', 10, 1, (u, v) => { const [x, y] = local(u, v); const r = circ(x, y), a = Math.atan2(y, x); return Math.max(line(r - 0.3 - 0.05 * Math.cos(a * 8), 0.05), line(Math.max(Math.abs(x), Math.abs(y)) - 0.5, 0.05), r < 0.08 ? 1 : 0); }],
     ['smocking', 'Smocking', 14, 1.2, (u, v) => { const x = fr(u + v * 0.5), y = fr(u - v * 0.5); return Math.sqrt(cl(1 - Math.min(circ(x - 0.5, y - 0.5) * 2.2, 1))); }],

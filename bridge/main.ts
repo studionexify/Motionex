@@ -25,6 +25,33 @@ const cfgFile = path.join(dir, 'config.json'), devFile = path.join(dir, 'devices
 const readJson = <T,>(f: string, d: T): T => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
 const writeJson = (f: string, v: unknown) => fs.writeFileSync(f, JSON.stringify(v, null, 2), { mode: 0o600 });
 
+// Secrets (Bambu access codes, OctoPrint/Moonraker API keys) are encrypted at rest with AES-256-GCM.
+// The key is random, kept in its own file (owner-only) and bound to this user and computer, so a copied
+// devices.json is useless on its own.
+const keyFile = path.join(dir, 'secret.key');
+if (!fs.existsSync(keyFile)) fs.writeFileSync(keyFile, crypto.randomBytes(32), { mode: 0o600 });
+const KEY = crypto.scryptSync(fs.readFileSync(keyFile), `motionex-bridge|${os.userInfo().username}|${os.hostname()}`, 32);
+const SECRET_FIELDS = ['accessCode', 'apiKey'] as const;
+function seal(v: string) {
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', KEY, iv);
+  const enc = Buffer.concat([c.update(v, 'utf8'), c.final()]);
+  return `enc:v1:${Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64')}`;
+}
+function unseal(v: string) {
+  if (!v.startsWith('enc:v1:')) return v;   // older plain entries are re-saved encrypted below
+  try {
+    const b = Buffer.from(v.slice(7), 'base64'), d = crypto.createDecipheriv('aes-256-gcm', KEY, b.subarray(0, 12));
+    d.setAuthTag(b.subarray(12, 28));
+    return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
+  } catch { return ''; }
+}
+const sealDevices = (list: SavedDevice[]) => list.map((d) => { const c: Record<string, unknown> = { ...d.config }; for (const k of SECRET_FIELDS) if (typeof c[k] === 'string' && c[k]) c[k] = seal(c[k] as string); return { ...d, config: c }; });
+const openDevices = (list: SavedDevice[]) => list.map((d) => { const c: Record<string, unknown> = { ...d.config }; for (const k of SECRET_FIELDS) if (typeof c[k] === 'string' && c[k]) c[k] = unseal(c[k] as string); return { ...d, config: c as SavedDevice['config'] }; });
+const loadDevicesFile = () => openDevices(readJson<SavedDevice[]>(devFile, []));
+const saveDevicesFile = (list: SavedDevice[]) => writeJson(devFile, sealDevices(list));
+// upgrade any plain-text secrets left by an older bridge
+{ const raw = readJson<SavedDevice[]>(devFile, []); if (raw.some((d) => SECRET_FIELDS.some((k) => d.config[k] && !String(d.config[k]).startsWith('enc:v1:')))) saveDevicesFile(openDevices(raw)); }
+
 const cfg = readJson<{ code?: string; origins?: string[] }>(cfgFile, {});
 if (!cfg.code) cfg.code = crypto.randomInt(100000, 999999).toString();
 const extraOrigin = arg('origin');
@@ -59,8 +86,8 @@ function create(c: LanConfig): PrinterConnection {
 const ALLOWED = ['startPrint', 'pause', 'resume', 'cancel', 'sendGcode', 'listFiles', 'deleteFile', 'setLight', 'setSpeed', 'cameraUrl'];
 async function handle(op: string, a: any[]): Promise<unknown> {
   switch (op) {
-    case 'load': return readJson<SavedDevice[]>(devFile, []);
-    case 'save': writeJson(devFile, a[0]); return true;
+    case 'load': return loadDevicesFile();
+    case 'save': saveDevicesFile(a[0]); return true;
     case 'discover': return discoverPrinters();
     case 'connect': {
       const [id, c] = a as [string, LanConfig];

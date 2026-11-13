@@ -307,8 +307,8 @@ export function meshGrid(d: Design, maxVerts = 600_000, quick = false) {
   if (d.section !== 'round') cols = Math.max(cols, d.sides * 16);
   if (rl.kind !== 'smooth' && rl.depth !== 0) {
     const n = Math.max(1, rl.count), cell = (2 * Math.PI * R) / n, vcell = cell * (rl.aspect ?? 1);
-    cols = Math.max(cols, n * 32);
-    rows = Math.max(rows, Math.round(d.height / Math.max(0.15, vcell / 32)));
+    cols = Math.max(cols, n * 48);
+    rows = Math.max(rows, Math.round(d.height / Math.max(0.15, vcell / 48)));
     if (rl.kind === 'rings') rows = Math.max(rows, n * 24);
   }
   cols = Math.min(cols, 1800); rows = Math.min(rows, 1400);

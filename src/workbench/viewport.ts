@@ -4,7 +4,8 @@
 // (flat ribbons, or round tubes for close-up), with blobs, thin spots and sag from physics.ts.
 import * as THREE from 'three';
 import { SlicerCamera, viewCube } from './camera';
-import { makeInner, makeSurface, meshGrid, type Design } from './design';
+import { makeSurface, meshGrid, type Design } from './design';
+import { quadDiagonal, surfaceGrid } from './surfacegrid';
 import type { GenResult } from './generator';
 import { DEFECT, type PrintSim } from './physics';
 
@@ -134,44 +135,39 @@ export class StudioView {
   /** Rebuild the piece mesh. quick = coarse mesh for live dragging. */
   setDesign(d: Design, color = '#ece6dc', quick = false) {
     this.design = d;
-    const surf = makeSurface(d), inner = makeInner(d); this.surf = surf;
+    const surf = makeSurface(d); this.surf = surf;
     const { rows, cols } = meshGrid(d, 380_000, quick);
     const G = (rows + 1) * (cols + 1), nV = G * 2 + 1;
-    let geo = this.mesh?.geometry as THREE.BufferGeometry | undefined;
-    const reuse = !!geo && this.meshRows === rows && this.meshCols === cols && this.meshOpen === d.openBottom;
-    const pos = reuse ? (geo!.getAttribute('position').array as Float32Array) : new Float32Array(nV * 3);
-    const cosT = new Float32Array(cols + 1), sinT = new Float32Array(cols + 1);
-    for (let j = 0; j <= cols; j++) { const th = (j / cols) * TAU; cosT[j] = Math.cos(th); sinT[j] = Math.sin(th); }
-    let k = 0;
-    for (const f of [surf, inner]) for (let i = 0; i <= rows; i++) {
-      const z = (i / rows) * d.height;
-      for (let j = 0; j <= cols; j++) { const r = f(z, (j / cols) * TAU); pos[k++] = r * cosT[j]; pos[k++] = r * sinT[j]; pos[k++] = z; }
+    // outer and inner faces, with grid points moved onto pattern edges (exact outlines, no staircase)
+    const go = surfaceGrid(d, rows, cols, 'outer', !quick), gi = surfaceGrid(d, rows, cols, 'inner', !quick);
+    const pos = new Float32Array(nV * 3);
+    pos.set(go.pos, 0); pos.set(gi.pos, G * 3);
+    const idx = new Uint32Array(rows * cols * 12 + cols * 12);
+    let q = 0;
+    for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
+      const a = i * (cols + 1) + j, b = a + 1, c = a + cols + 1, e = c + 1;
+      if (quadDiagonal(go.f, a, b, c, e)) { idx[q++] = a; idx[q++] = b; idx[q++] = e; idx[q++] = a; idx[q++] = e; idx[q++] = c; }
+      else { idx[q++] = a; idx[q++] = b; idx[q++] = c; idx[q++] = b; idx[q++] = e; idx[q++] = c; }
+      if (quadDiagonal(gi.f, a, b, c, e)) { idx[q++] = G + a; idx[q++] = G + e; idx[q++] = G + b; idx[q++] = G + a; idx[q++] = G + c; idx[q++] = G + e; }
+      else { idx[q++] = G + a; idx[q++] = G + c; idx[q++] = G + b; idx[q++] = G + b; idx[q++] = G + c; idx[q++] = G + e; }
     }
-    pos[k++] = 0; pos[k++] = 0; pos[k++] = 0;
-    if (!reuse) {
-      const idx = new Uint32Array(rows * cols * 12 + cols * 6 + cols * 6);
-      let q = 0;
-      for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
-        const a = i * (cols + 1) + j, b = a + 1, c = a + cols + 1, e = c + 1;
-        idx[q++] = a; idx[q++] = b; idx[q++] = e; idx[q++] = a; idx[q++] = e; idx[q++] = c;
-        idx[q++] = G + a; idx[q++] = G + e; idx[q++] = G + b; idx[q++] = G + a; idx[q++] = G + c; idx[q++] = G + e;
-      }
-      const top = rows * (cols + 1);
-      for (let j = 0; j < cols; j++) { const o = top + j; idx[q++] = o; idx[q++] = o + 1; idx[q++] = G + o + 1; idx[q++] = o; idx[q++] = G + o + 1; idx[q++] = G + o; }
-      if (d.openBottom) for (let j = 0; j < cols; j++) { idx[q++] = j; idx[q++] = G + j + 1; idx[q++] = j + 1; idx[q++] = j; idx[q++] = G + j; idx[q++] = G + j + 1; }
-      else { const centre = 2 * G; for (let j = 0; j < cols; j++) { idx[q++] = centre; idx[q++] = j + 1; idx[q++] = j; idx[q++] = centre; idx[q++] = j; idx[q++] = j + 1; } }
-      geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nV * 3).fill(1), 3));
-      geo.setIndex(new THREE.BufferAttribute(idx.subarray(0, q), 1));
-      if (this.mesh) { this.mesh.geometry.dispose(); this.mesh.geometry = geo; }
-      this.meshRows = rows; this.meshCols = cols; this.meshOpen = d.openBottom;
-    } else geo!.getAttribute('position').needsUpdate = true;
+    const top = rows * (cols + 1);
+    for (let j = 0; j < cols; j++) { const o = top + j; idx[q++] = o; idx[q++] = o + 1; idx[q++] = G + o + 1; idx[q++] = o; idx[q++] = G + o + 1; idx[q++] = G + o; }
+    if (d.openBottom) for (let j = 0; j < cols; j++) { idx[q++] = j; idx[q++] = G + j + 1; idx[q++] = j + 1; idx[q++] = j; idx[q++] = G + j; idx[q++] = G + j + 1; }
+    else { const centre = 2 * G; for (let j = 0; j < cols; j++) { idx[q++] = centre; idx[q++] = j + 1; idx[q++] = j; idx[q++] = centre; idx[q++] = j; idx[q++] = j + 1; } }
+    let geo = this.mesh?.geometry as THREE.BufferGeometry | undefined;
+    if (geo) geo.dispose();
+    geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nV * 3).fill(1), 3));
+    geo.setIndex(new THREE.BufferAttribute(idx.subarray(0, q), 1));
+    if (this.mesh) this.mesh.geometry = geo;
+    this.meshRows = rows; this.meshCols = cols; this.meshOpen = d.openBottom;
     geo!.computeVertexNormals();
     geo!.computeBoundingSphere();
     this.baseColor.set(color);
     if (!this.mesh) {
-      this.mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide }));
+      this.mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
       this.scene.add(this.mesh);
     }
     this.mesh.visible = this.showModel;

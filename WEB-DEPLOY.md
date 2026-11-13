@@ -93,5 +93,5 @@ Start it automatically (pick one):
 
 - **Browsers**: Chrome or Edge recommended (they allow a secure site to reach the bridge on `localhost` and support USB printers). Safari and Firefox work for design and slicing; reaching the bridge can be blocked there.
 - **Storage**: designs and settings stay in the browser on each computer (library in IndexedDB). Clearing site data deletes them; use Export STL / G-code for anything you want to keep elsewhere.
-- **Security**: the bridge only listens on `127.0.0.1`, only accepts the Motionex site's origin, and only after pairing. Bambu access codes are stored in plain text in `~/.motionex-bridge/devices.json` with user-only permissions.
+- **Security**: the bridge only listens on `127.0.0.1`, only accepts the Motionex site's origin, and only after pairing. Bambu access codes and API keys are encrypted (AES-256-GCM) in `~/.motionex-bridge/devices.json`; the key is in `secret.key` next to it (user-only) and is bound to this user and computer.
 - **USB printers** connect straight from Chrome/Edge (Web Serial) without the bridge.
