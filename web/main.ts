@@ -19,6 +19,7 @@ mountStudio(document.getElementById('app')!, {
   host,
   save: async (name, data) => download(name, data),
   worker: () => new Worker(new URL('../src/workbench/slice.worker.ts', import.meta.url), { type: 'module' }),
+  meshWorker: () => new Worker(new URL('../src/workbench/mesh.worker.ts', import.meta.url), { type: 'module' }),
   storage: idb,
 });
 

@@ -1,7 +1,7 @@
 // Turn a picture, SVG, DXF drawing or a line of text into a relief height map (dark = raised).
 import { bytesToMap, type HeightMap } from './reliefs';
 
-const MAX = 384;
+const MAX = 768;
 
 function canvasToMap(c: HTMLCanvasElement, soften: number): HeightMap {
   const out = document.createElement('canvas'); out.width = c.width; out.height = c.height;

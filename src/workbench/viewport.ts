@@ -4,8 +4,8 @@
 // (flat ribbons, or round tubes for close-up), with blobs, thin spots and sag from physics.ts.
 import * as THREE from 'three';
 import { SlicerCamera, viewCube } from './camera';
-import { makeSurface, meshGrid, type Design } from './design';
-import { quadDiagonal, surfaceGrid } from './surfacegrid';
+import { makeSurface, type Design } from './design';
+import { buildMesh, meshToStl, type BuiltMesh } from './meshbuild';
 import type { GenResult } from './generator';
 import { DEFECT, type PrintSim } from './physics';
 
@@ -66,7 +66,6 @@ export class StudioView {
   private controls: SlicerCamera;
   private cube: { update: () => void } | null = null;
   private mesh: THREE.Mesh | null = null;
-  private meshRows = 0; private meshCols = 0; private meshOpen = false;
   private lines: THREE.LineSegments | null = null;
   private beads: THREE.Mesh | null = null;
   private beadIndex: Int32Array = new Int32Array(0);        // instance -> seg
@@ -133,70 +132,70 @@ export class StudioView {
   // ───────── model mesh
   private baseColor = new THREE.Color('#ece6dc');
   /** Rebuild the piece mesh. quick = coarse mesh for live dragging. */
+  /** Background mesh builder (Web Worker) for the full-quality mesh; without one it builds here. */
+  meshWorker: (() => Worker) | null = null;
+  private worker: Worker | null = null;
+  private meshSeq = 0;
+  private built: BuiltMesh | null = null;
+  /** Show the piece: a coarse mesh at once while editing, then the CAD-quality mesh (in the background). */
   setDesign(d: Design, color = '#ece6dc', quick = false) {
-    this.design = d;
-    const surf = makeSurface(d); this.surf = surf;
-    const { rows, cols } = meshGrid(d, 380_000, quick);
-    const G = (rows + 1) * (cols + 1), nV = G * 2 + 1;
-    // outer and inner faces, with grid points moved onto pattern edges (exact outlines, no staircase)
-    const go = surfaceGrid(d, rows, cols, 'outer', !quick), gi = surfaceGrid(d, rows, cols, 'inner', !quick);
-    const pos = new Float32Array(nV * 3);
-    pos.set(go.pos, 0); pos.set(gi.pos, G * 3);
-    const idx = new Uint32Array(rows * cols * 12 + cols * 12);
-    let q = 0;
-    for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
-      const a = i * (cols + 1) + j, b = a + 1, c = a + cols + 1, e = c + 1;
-      if (quadDiagonal(go.f, a, b, c, e)) { idx[q++] = a; idx[q++] = b; idx[q++] = e; idx[q++] = a; idx[q++] = e; idx[q++] = c; }
-      else { idx[q++] = a; idx[q++] = b; idx[q++] = c; idx[q++] = b; idx[q++] = e; idx[q++] = c; }
-      if (quadDiagonal(gi.f, a, b, c, e)) { idx[q++] = G + a; idx[q++] = G + e; idx[q++] = G + b; idx[q++] = G + a; idx[q++] = G + c; idx[q++] = G + e; }
-      else { idx[q++] = G + a; idx[q++] = G + c; idx[q++] = G + b; idx[q++] = G + b; idx[q++] = G + c; idx[q++] = G + e; }
+    this.design = d; this.surf = makeSurface(d); this.baseColor.set(color);
+    const seq = ++this.meshSeq;
+    const firstFrame = this.gridSize === 0;
+    this.height = d.height; this.gridSize = d.maxDiameter; this.buildGrid();
+    if (firstFrame) this.fit();
+    if (quick || !this.built) this.applyMesh(buildMesh(d, 'quick'));
+    if (quick) return;
+    if (this.meshWorker) {
+      this.worker ??= this.meshWorker();
+      this.worker.onmessage = (e) => { if (e.data.id === this.meshSeq && e.data.ok && e.data.mesh) this.applyMesh(e.data.mesh); };
+      this.worker.postMessage({ id: seq, kind: 'view', design: JSON.parse(JSON.stringify(d)) });
+    } else {
+      setTimeout(() => { if (seq === this.meshSeq) this.applyMesh(buildMesh(d, 'view')); }, 0);
     }
-    const top = rows * (cols + 1);
-    for (let j = 0; j < cols; j++) { const o = top + j; idx[q++] = o; idx[q++] = o + 1; idx[q++] = G + o + 1; idx[q++] = o; idx[q++] = G + o + 1; idx[q++] = G + o; }
-    if (d.openBottom) for (let j = 0; j < cols; j++) { idx[q++] = j; idx[q++] = G + j + 1; idx[q++] = j + 1; idx[q++] = j; idx[q++] = G + j; idx[q++] = G + j + 1; }
-    else { const centre = 2 * G; for (let j = 0; j < cols; j++) { idx[q++] = centre; idx[q++] = j + 1; idx[q++] = j; idx[q++] = centre; idx[q++] = j; idx[q++] = j + 1; } }
-    let geo = this.mesh?.geometry as THREE.BufferGeometry | undefined;
-    if (geo) geo.dispose();
-    geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nV * 3).fill(1), 3));
-    geo.setIndex(new THREE.BufferAttribute(idx.subarray(0, q), 1));
-    if (this.mesh) this.mesh.geometry = geo;
-    this.meshRows = rows; this.meshCols = cols; this.meshOpen = d.openBottom;
-    geo!.computeVertexNormals();
-    geo!.computeBoundingSphere();
-    this.baseColor.set(color);
-    if (!this.mesh) {
-      this.mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
+  }
+  /** STL at export quality (in the background when possible). */
+  exportStl(d: Design): Promise<ArrayBuffer> {
+    if (!this.meshWorker) return Promise.resolve(meshToStl(buildMesh(d, 'export')));
+    const w = this.meshWorker(), id = -1;
+    return new Promise((ok, no) => { w.onmessage = (e) => { w.terminate(); if (e.data.ok) ok(e.data.stl); else no(new Error(e.data.error)); }; w.postMessage({ id, kind: 'stl', design: JSON.parse(JSON.stringify(d)) }); });
+  }
+  private applyMesh(m: BuiltMesh) {
+    this.built = m;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(m.position, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(m.normal, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(m.position.length).fill(1), 3));
+    geo.computeBoundingSphere();
+    if (this.mesh) { this.mesh.geometry.dispose(); this.mesh.geometry = geo; }
+    else {
+      this.mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide }));
       this.scene.add(this.mesh);
     }
     this.mesh.visible = this.showModel;
     this.paintMesh();
-    const firstFrame = this.gridSize === 0;
-    this.height = d.height; this.gridSize = d.maxDiameter; this.buildGrid();
-    if (firstFrame) this.fit();
     this.draw();
   }
   /** Colour the mesh: base colour, mixed with rule colours where a rule applies. */
   setHighlight(fn: ((z: number, a: number, r: number) => [number, number, number] | null) | null) { this.highlight = fn; this.paintMesh(); this.draw(); }
   private paintMesh() {
-    if (!this.mesh || !this.design) return;
-    const geo = this.mesh.geometry as THREE.BufferGeometry;
-    const col = geo.getAttribute('color') as THREE.BufferAttribute, c = col.array as Float32Array;
-    const pos = geo.getAttribute('position').array as Float32Array;
-    const rows = this.meshRows, cols = this.meshCols, H = this.design.height, base = this.baseColor;
-    const fn = this.highlight;
-    const G = (rows + 1) * (cols + 1);
-    for (let gi = 0; gi < 2; gi++) for (let i = 0; i <= rows; i++) {
-      const z = (i / rows) * H;
-      for (let j = 0; j <= cols; j++) {
-        const v = gi * G + i * (cols + 1) + j, o = v * 3;
-        let r = base.r, g = base.g, b = base.b;
-        if (fn) { const hc = fn(z, j / cols, Math.hypot(pos[o], pos[o + 1])); if (hc) { r = hc[0]; g = hc[1]; b = hc[2]; } }
-        c[o] = r; c[o + 1] = g; c[o + 2] = b;
-      }
-    }
-    const last = 2 * G * 3; c[last] = base.r; c[last + 1] = base.g; c[last + 2] = base.b;
+    const m = this.built;
+    if (!this.mesh || !this.design || !m) return;
+    const col = this.mesh.geometry.getAttribute('color') as THREE.BufferAttribute, c = col.array as Float32Array;
+    const base = this.baseColor, fn = this.highlight, H = this.design.height;
+    if (!fn) { for (let k = 0; k < c.length; k += 3) { c[k] = base.r; c[k + 1] = base.g; c[k + 2] = base.b; } col.needsUpdate = true; return; }
+    // colour per grid point, then spread to the triangles that use it
+    const W = m.outer.cols + 1, G = (m.outer.rows + 1) * W, G2 = (m.inner.rows + 1) * W;
+    const grid = new Float32Array((G + G2 + 2) * 3);
+    const paint = (k: number, rows: number, i: number, j: number, r: number) => {
+      const hc = fn((i / rows) * H, j / m.outer.cols, r);
+      grid[k * 3] = hc ? hc[0] : base.r; grid[k * 3 + 1] = hc ? hc[1] : base.g; grid[k * 3 + 2] = hc ? hc[2] : base.b;
+    };
+    const R0 = this.design.maxDiameter / 2;
+    for (let i = 0; i <= m.outer.rows; i++) for (let j = 0; j < W; j++) { const k = i * W + j; paint(k, m.outer.rows, i, j, Math.hypot(m.outer.pos[k * 3], m.outer.pos[k * 3 + 1])); }
+    for (let i = 0; i <= m.inner.rows; i++) for (let j = 0; j < W; j++) paint(G + i * W + j, m.inner.rows, i, j, R0);
+    for (const k of [G + G2, G + G2 + 1]) { grid[k * 3] = base.r; grid[k * 3 + 1] = base.g; grid[k * 3 + 2] = base.b; }
+    for (let v = 0; v < m.src.length; v++) { const k = m.src[v] * 3; c[v * 3] = grid[k]; c[v * 3 + 1] = grid[k + 1]; c[v * 3 + 2] = grid[k + 2]; }
     col.needsUpdate = true;
   }
 
@@ -237,25 +236,25 @@ export class StudioView {
   }
   /** Front-facing mesh vertices whose screen position passes `inside` → selected cells per mesh row. */
   selectScreen(inside: (sx: number, sy: number) => boolean) {
-    if (!this.mesh || !this.design) return [];
-    const geo = this.mesh.geometry as THREE.BufferGeometry;
-    const pos = geo.getAttribute('position').array as Float32Array, nrm = geo.getAttribute('normal').array as Float32Array;
+    const mm = this.built;
+    if (!mm || !this.design) return [];
+    const pos = mm.outer.pos, rows = mm.outer.rows, cols = mm.outer.cols, W = cols + 1;
     const rect = this.canvas.getBoundingClientRect();
     const v = new THREE.Vector3(), cam = this.camera.position;
     const m = new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
-    const rows = this.meshRows, cols = this.meshCols, H = this.design.height, dz = H / rows / 2;
+    // a coarser sampling of the outer face is plenty for picking regions
+    const si = Math.max(1, Math.ceil(rows / 400)), sj = Math.max(1, Math.ceil(cols / 480)), nc = Math.ceil(cols / sj);
+    const H = this.design.height, dz = (H / rows) * si / 2;
     const out: { z: number; dz: number; cells: boolean[] }[] = [];
-    for (let i = 0; i <= rows; i++) {
-      const cells = new Array<boolean>(cols).fill(false); let any = false;
-      for (let j = 0; j < cols; j++) {
-        const o = (i * (cols + 1) + j) * 3;
-        const px = pos[o], py = pos[o + 1], pz = pos[o + 2];
-        // front-facing: outward normal points to the camera
-        if (nrm[o] * (cam.x - px) + nrm[o + 1] * (cam.y - py) + nrm[o + 2] * (cam.z - pz) <= 0) continue;
+    for (let i = 0; i <= rows; i += si) {
+      const cells = new Array<boolean>(nc).fill(false); let any = false;
+      for (let jj = 0; jj < nc; jj++) {
+        const o = (i * W + jj * sj) * 3, px = pos[o], py = pos[o + 1], pz = pos[o + 2];
+        if (px * (cam.x - px) + py * (cam.y - py) <= 0) continue;     // facing away (outward ≈ radial)
         v.set(px, py, pz).applyMatrix4(m);
         if (v.z > 1) continue;
         const sx = rect.left + (v.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-v.y * 0.5 + 0.5) * rect.height;
-        if (inside(sx, sy)) { cells[j] = true; any = true; }
+        if (inside(sx, sy)) { cells[jj] = true; any = true; }
       }
       if (any) out.push({ z: (i / rows) * H, dz, cells });
     }

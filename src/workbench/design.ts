@@ -11,12 +11,14 @@ export interface Relief {
   kind: ReliefKind; count: number; depth: number; start: number; end: number; transition: number;
   aspect?: number; slant?: number; invert?: boolean; sharp?: number; seed?: number; rowShift?: number;
   map?: HeightMap; mapMode?: 'tile' | 'band'; tilesUp?: number;
+  /** Image as a sharp traced outline (default) or as grey shades (photos). */
+  mapVector?: boolean;
   /** Which face carries the relief. Raised/carved is the sign of depth. */
   side?: 'outside' | 'inside' | 'both';
   /** Edge softness 0 (knife-sharp) … 1 (rounded). */
   edge?: number;
 }
-import { PATTERNS, patternById, sampleMap, setEdge, type HeightMap } from './reliefs';
+import { PATTERNS, patternById, sampleMapCubic, sampleMapVector, setEdge, type HeightMap } from './reliefs';
 export type TwistShape = 'linear' | 's' | 'wave';
 
 export interface ProfilePoint { r: number; t: number } // r: 0..1 of max radius, t: 0..1 of height
@@ -200,8 +202,9 @@ export function relief(d: Design, t: number, th: number, R: number): number {
       const uu = u + vv * Math.tan(((rl.slant ?? 0) * Math.PI) / 180) + Math.floor(vv) * (rl.rowShift ?? 0);
       if (rl.kind === 'image') {
         if (!rl.map) return 0;
+        setEdge(rl.edge ?? 0.15);
         const y = rl.mapMode === 'band' ? 1 - frac(clamp((t - rl.start) / Math.max(1e-3, rl.end - rl.start), 0, 0.9999) * Math.max(1, rl.tilesUp ?? 1)) : 1 - frac(vv);
-        f = sampleMap(rl.map, uu, y);
+        f = rl.mapVector === false ? sampleMapCubic(rl.map, uu, y) : sampleMapVector(rl.map, uu, y);
       } else {
         const p = patternById(rl.kind); if (!p) return 0;
         setEdge(rl.edge ?? 0.15);

@@ -12,7 +12,6 @@ import { DEFAULT_SLICE, nozzleLimits, unpackSegs, wallLines, motionSamples, newZ
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
 import { compensate, physicsFor, simulate, type Physics, type PrintSim } from './physics';
-import { stlFromDesign } from './stl';
 
 // ───────── host (printer connections; only the desktop app provides one)
 export interface PrinterLink { id: string; name: string; state: string; progress?: number; detail?: string; bed?: [number, number, number]; machine?: string; kind?: string; address?: string }
@@ -43,6 +42,8 @@ export interface StudioOptions {
   host?: StudioHost; download?: boolean; save?: (name: string, data: Uint8Array) => Promise<void>;
   /** Slice in a Web Worker (web app). */
   worker?: () => Worker;
+  /** Build the CAD-quality mesh / STL in a Web Worker. */
+  meshWorker?: () => Worker;
   /** Larger key/value storage for the library (IndexedDB in the web app). */
   storage?: { get<T>(k: string): Promise<T | undefined>; set(k: string, v: unknown): Promise<void> };
 }
@@ -179,6 +180,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   root.append(top, body);
 
   const view = new StudioView(glHost);
+  view.meshWorker = opts.meshWorker ?? null;
   const estCard = h('div', { class: 'mxs-est' });
   const viewBar = h('div', { class: 'mxs-viewbar' });
   const layerBar = h('div', { class: 'mxs-layerbar' });
@@ -349,8 +351,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   surpriseB.onclick = () => { const name = S.design.name; S.design = surprise(S.design.family); S.design.name = name; changed(true); renderAll(); };
   themeB.onclick = () => { const dark = !(root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches)); S.theme = dark ? 'dark' : 'light'; root.dataset.theme = S.theme; persist(); view.setTheme(dark); };
   exportB.onclick = () => {
-    const stl = stlFromDesign(S.design);
-    void saveOut(exportB, `${slug(S.design.name)}.stl`, new Uint8Array(stl as ArrayBuffer));
+    exportB.disabled = true; const label = exportB.lastChild!.textContent; exportB.lastChild!.textContent = 'Preparing STL…';
+    void view.exportStl(JSON.parse(JSON.stringify(S.design))).then((stl) => saveOut(exportB, `${slug(S.design.name)}.stl`, new Uint8Array(stl)))
+      .catch((e) => flash(exportB, `STL failed: ${String((e as Error).message)}`))
+      .finally(() => { exportB.disabled = false; if (exportB.lastChild) exportB.lastChild.textContent = label; });
   };
   nameIn.oninput = () => { S.design.name = nameIn.value || 'Untitled piece'; persist(); };
   const onKey = (e: KeyboardEvent) => {
@@ -582,6 +586,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
           custom ? row('Sharpness', num(() => rl.sharp ?? 1, (v) => (rl.sharp = v), 0.2, 4, 0.05, '', dChange)) : null,
           custom ? row('Invert', toggle(() => !!rl.invert, (v) => (rl.invert = v), dChange)) : null,
           NOISE_RELIEFS.has(rl.kind) ? row('Variation', num(() => rl.seed ?? 1, (v) => (rl.seed = v), 1, 99, 1, '', dChange)) : null,
+          rl.kind === 'image' ? row('Style', seg<'vector' | 'shades'>([['vector', 'Sharp outline'], ['shades', 'Shades (photo)']], () => (rl.mapVector === false ? 'shades' : 'vector'), (v) => { rl.mapVector = v === 'vector'; dChange(); renderPanel(); })) : null,
           rl.kind === 'image' ? row('Placement', select<'tile' | 'band'>([['tile', 'Tile (square cells)'], ['band', 'Fit the range height']], () => rl.mapMode ?? 'tile', (v) => (rl.mapMode = v), () => { dChange(); renderPanel(); })) : null,
           rl.kind === 'image' && rl.mapMode === 'band' ? row('Repeats up', num(() => rl.tilesUp ?? 1, (v) => (rl.tilesUp = v), 1, 50, 1, '', dChange)) : null,
           h('div', { class: 'mxs-sub' }, h('b', {}, 'Range (where it applies)'),

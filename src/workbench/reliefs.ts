@@ -205,3 +205,22 @@ export function bytesToMap(w: number, h: number, bytes: Uint8Array): HeightMap {
   let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return { w, h, data: btoa(s) };
 }
+
+/** Smooth (Catmull-Rom) sample of a height map: no pixel steps between samples. */
+export function sampleMapCubic(m: HeightMap, x: number, y: number): number {
+  const b = heightBytes(m), W = m.w, H = m.h;
+  const fx = fr(x) * W - 0.5, fy = cl(y) * (H - 1);
+  const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+  const X = (i: number) => ((i % W) + W) % W, Y = (j: number) => Math.min(H - 1, Math.max(0, j));
+  const cr = (p0: number, p1: number, p2: number, p3: number, t: number) => p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
+  const row = (j: number) => cr(b[Y(j) * W + X(x0 - 1)], b[Y(j) * W + X(x0)], b[Y(j) * W + X(x0 + 1)], b[Y(j) * W + X(x0 + 2)], tx);
+  return cl(cr(row(y0 - 1), row(y0), row(y0 + 1), row(y0 + 2), ty) / 255);
+}
+/** Image traced as a clean outline: the smoothed sample cut at half height; the edge rises over about one
+ *  image pixel, so the mesh can trace it as a smooth vector curve. */
+export function sampleMapVector(m: HeightMap, x: number, y: number): number {
+  // imports are already softened (Soften edges); a hard 1-px edge still rises over about a pixel here
+  const v = sampleMapCubic(m, x, y);
+  const t = cl((v - 0.25) / 0.5);
+  return t * t * (3 - 2 * t);
+}

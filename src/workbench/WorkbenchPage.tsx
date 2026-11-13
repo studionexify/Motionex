@@ -11,6 +11,6 @@ const appHost = makeHost({ manage: () => useStore.getState().set({ workspace: 'd
 
 export function WorkbenchPage() {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { void initDevices(); return ref.current ? mountStudio(ref.current, { host: appHost }) : undefined; }, []);
+  useEffect(() => { void initDevices(); return ref.current ? mountStudio(ref.current, { host: appHost, worker: () => new Worker(new URL('./slice.worker.ts', import.meta.url), { type: 'module' }), meshWorker: () => new Worker(new URL('./mesh.worker.ts', import.meta.url), { type: 'module' }) }) : undefined; }, []);
   return <div ref={ref} className="wb-host" style={{ gridColumn: '1 / -1', minHeight: 0, height: '100%', overflow: 'hidden' }} />;
 }
