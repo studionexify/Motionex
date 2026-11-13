@@ -173,6 +173,17 @@ export const PATTERNS: Pattern[] = [
     ['cactus', 'Cactus ribs & areoles', 14, 1.6, (u, v) => { const x = fr(u) - 0.5; const rib = Math.sqrt(cl(1 - (2 * x) ** 2)); return Math.max(rib * 0.85, (1 - ss(0.04, 0.08, circ(x, fr(v) - 0.5))) ); }],
     ['feathers', 'Feathers', 10, 1, (u, v) => { const row = Math.floor(v * 1.4); const x = fr(u + row * 0.5) - 0.5, y = fr(v * 1.4); return y < 1 - Math.abs(x) * 2 ? 0.6 + 0.4 * line(fr((y - Math.abs(x)) * 6) - 0.5, 0.4) : 0.1; }],
   ]),
+  // Open meshes for cut-through coasters: 1 = opening, 0 = web (bars ~0.12 of a cell)
+  ...P('Nets', [
+    ['netsquare', 'Square mesh', 10, 1, (u, v) => { const [x, y] = local(u, v); return 1 - ss(0.36, 0.40, Math.max(Math.abs(x), Math.abs(y))); }],
+    ['netdiamond', 'Diamond mesh', 10, 1, (u, v) => { const [x, y] = local(u, v); return 1 - ss(0.34, 0.38, (Math.abs(x) + Math.abs(y))); }],
+    ['netround', 'Round holes', 12, 1, (u, v) => { const row = Math.floor(v); const [x, y] = local(u + (row % 2) * 0.5, v); return 1 - ss(0.32, 0.36, circ(x, y)); }],
+    ['nethex', 'Hex mesh', 10, 1, (u, v) => 1 - ss(0.40, 0.44, hex(u, v).hd)],
+    ['nettri', 'Triangle mesh', 10, 1, (u, v) => { const y = fr(v), x = fr(u + Math.floor(v) * 0.5); const d = Math.min(y, (1 - Math.abs(2 * x - 1)) - y) ; const a = fr(u + Math.floor(v) * 0.5 + 0.5); const d2 = Math.min(1 - y, y - (1 - Math.abs(2 * a - 1))); return Math.max(ss(0.05, 0.09, d), ss(0.05, 0.09, d2)); }],
+    ['netslots', 'Slots', 12, 1, (u, v) => { const row = Math.floor(v * 2); const x = fr(u + (row % 2) * 0.5) - 0.5, y = fr(v * 2) - 0.5; return 1 - ss(0.0, 0.04, Math.max(Math.abs(x) - 0.36, 0) ** 2 + 0 * y + Math.max(Math.abs(y) - 0.28, 0) ** 2 > 0 ? 1 : 0); }],
+    ['netcross', 'Cross mesh', 10, 1, (u, v) => { const [x, y] = local(u, v); const ax = Math.abs(x), ay = Math.abs(y); return (ax < 0.4 && ay < 0.12) || (ay < 0.4 && ax < 0.12) ? 1 : 0; }],
+    ['netwave', 'Wave mesh', 10, 1, (u, v) => { const y = fr(v + 0.12 * Math.sin(u * TAU)) - 0.5, x = fr(u + 0.12 * Math.sin(v * TAU)) - 0.5; return 1 - ss(0.34, 0.38, Math.max(Math.abs(x), Math.abs(y))); }],
+  ]),
   ...P('Textiles', [
     ['tartan', 'Tartan', 6, 0.8, (u, v) => { const f = (t: number) => (fr(t) < 0.15 ? 1 : fr(t) < 0.2 ? 0.2 : fr(t) > 0.6 && fr(t) < 0.65 ? 0.8 : 0.4); return (f(u) + f(v)) / 2; }],
     ['houndstooth', 'Houndstooth', 14, 0.8, (u, v) => { const x = fr(u) * 4, y = fr(v) * 4; const xi = Math.floor(x), yi = Math.floor(y); const base = (xi < 2) === (yi < 2); const tooth = (xi === 2 && yi === 1 && fr(x) > fr(y)) || (xi === 1 && yi === 2 && fr(x) < fr(y)) || (xi === 0 && yi === 3) || (xi === 3 && yi === 0); return base !== tooth ? 1 : 0; }],

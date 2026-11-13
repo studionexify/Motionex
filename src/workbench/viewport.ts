@@ -153,8 +153,8 @@ export class StudioView {
     const colourOnly = this.baseColor.getHexString() !== new THREE.Color(color).getHexString();
     this.baseColor.set(color);
     const firstFrame = this.gridSize === 0;
-    this.height = d.height; this.gridSize = d.maxDiameter; this.buildGrid();
-    if (firstFrame) this.fit();
+    if (d.family === 'coaster' && d.coaster) { const c = d.coaster, R = c.diameter / 2 + c.gap + c.wall; this.height = Math.max(20, c.floor + c.count * c.thickness + 1.5); this.gridSize = 4 * R + 20; this.centerX = c.caseOn ? (R + c.diameter / 2 + 12) / 2 : 0; } else { this.height = d.height; this.gridSize = d.maxDiameter; this.centerX = 0; } this.buildGrid();
+    if (firstFrame || d.family !== this.lastFamily) { this.lastFamily = d.family; this.fit(); }
     const key = JSON.stringify({ ...d, name: '' });
     if (key === this.shapeKey && this.built) {
       if (colourOnly) { this.paintMesh(); this.draw(); }
@@ -240,8 +240,10 @@ export class StudioView {
 
   /** Standard view: front-left three-quarter view from a little above, whole piece in frame. */
   private fitDist() { const h = this.height, r = this.gridSize / 2; return Math.max(h * 1.15, r * 2.3) / Math.tan((this.camera.fov * Math.PI) / 360) * 0.62; }
-  fit() { this.controls.set(new THREE.Vector3(0, 0, this.height * 0.5), this.fitDist(), -60, 25); }
-  home() { this.controls.target.set(0, 0, this.height * 0.5); this.controls.dist = this.fitDist(); this.controls.look(-60, 25); }
+  centerX = 0;
+  private lastFamily = '';
+  fit() { this.controls.set(new THREE.Vector3(this.centerX, 0, this.height * 0.5), this.centerX ? this.gridSize * 1.5 : this.fitDist(), -60, this.centerX ? 40 : 25); }
+  home() { this.controls.target.set(this.centerX, 0, this.height * 0.5); this.controls.dist = this.centerX ? this.gridSize * 1.5 : this.fitDist(); this.controls.look(-60, 25); }
 
   // ───────── picking (analytic ray march against the surface of revolution: fast, no BVH)
   private ray(clientX: number, clientY: number) {

@@ -5,9 +5,10 @@
 import { PRESETS } from '../plugins/motionex/presets';
 import type { LayerEffect, LayerMode, MotionBrush, WaveShape } from '../plugins/motionex/model';
 import { effectPhase } from '../plugins/motionex/modifier';
-import { ALL_RELIEFS, defaultDesign, estimate, makeSurface, FAMILIES, NOISE_RELIEFS, OUTLINES, profileR, relief as reliefAt, RELIEFS, SECTIONS, surprise, type Design, type Family, type ProfilePoint } from './design';
+import { ALL_RELIEFS, sectionMul, defaultDesign, estimate, makeSurface, FAMILIES, NOISE_RELIEFS, OUTLINES, profileR, relief as reliefAt, RELIEFS, SECTIONS, surprise, type Design, type Family, type ProfilePoint } from './design';
 import { heightBytes, type HeightMap } from './reliefs';
 import { fileToMap, textToMap } from './relief-import';
+import { caseHeight, COASTER_SHAPES } from './coaster';
 import { DEFAULT_SLICE, nozzleLimits, unpackSegs, wallLines, motionSamples, newZone, PRINTERS, slice, type GenResult, type MotionZone, type SliceSettings } from './generator';
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
@@ -85,6 +86,7 @@ const ICON: Record<string, string> = {
   cube: 'M12 2 3 7v10l9 5 9-5V7zM3 7l9 5 9-5M12 12v10', beads: 'M4 9h16a3 3 0 0 1 0 6H4a3 3 0 0 1 0-6z', tubes: 'M6 7a2 2 0 1 0 0 4M6 13a2 2 0 1 0 0 4M6 7h14M6 11h14M6 13h14M6 17h14',
   palette: 'M12 3a9 9 0 1 0 0 18c1 0 2-1 1.5-2.5S14 15 16 15h2a3 3 0 0 0 3-3c0-5-4-9-9-9zM7.5 11v.01M10 7v.01M15 7v.01', info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v6M12 7.5v.01',
   chev: 'm9 6 6 6-6 6', clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2', weight: 'M6 8h12l2 13H4zM9 8a3 3 0 0 1 6 0',
+  coaster: 'M3 9c0-2 4-3.5 9-3.5S21 7 21 9v1.5c0 2-4 3.5-9 3.5S3 12.5 3 10.5zM3 13.5c0 2 4 3.5 9 3.5s9-1.5 9-3.5',
   vase: 'M8 3h8M9 3c0 3-4 5-4 10a7 7 0 0 0 14 0c0-5-4-7-4-10', pendant: 'M12 2v5M5 17a7 7 0 0 1 14 0zM10 20h4', shade: 'M7 4h10l3 11H4zM12 15v5M8 20h8', bowl: 'M3 10h18a9 7 0 0 1-18 0zM8 21h8',
 };
 const icon = (n: string, s = 15) => { const w = document.createElement('span'); w.className = 'mxs-ic'; w.innerHTML = `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${ICON[n]}"/></svg>`; return w; };
@@ -491,7 +493,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   // Progressive disclosure: every section folds; only the essentials start open; your choice is remembered.
   const OPEN_KEY = 'motionex.open.v1';
   const openState: Record<string, boolean> = (() => { try { return JSON.parse(localStorage.getItem(OPEN_KEY) ?? '{}'); } catch { return {}; } })();
-  const OPEN_DEFAULT = new Set(['Piece profile', 'Relief / surface', 'Edit', 'Rules', 'Selected rule', 'Change there', 'Motion zones (layer by layer)', 'Zone', 'Output', 'Printer', 'Render']);
+  const OPEN_DEFAULT = new Set(['Coaster shape', 'Plates', 'Case', 'Piece profile', 'Relief / surface', 'Edit', 'Rules', 'Selected rule', 'Change there', 'Motion zones (layer by layer)', 'Zone', 'Output', 'Printer', 'Render']);
   const group = (title: string, ...kids: (HTMLElement | null)[]) => {
     const key = title.split(' · ')[0];
     const d = h('details', { class: 'mxs-group' }) as HTMLDetailsElement;
@@ -513,8 +515,36 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const importOpts = { soften: 1, lineWidth: 0.012, fillClosed: false };
   const dChange = () => changed(true);
 
+  function coasterShapePanel() {
+    const c = D().coaster!;
+    const gal = h('div', { class: 'mxs-chips mxs-chips-4' });
+    for (const sh of COASTER_SHAPES) {
+      const cv = h('canvas', { width: '44', height: '44' }) as HTMLCanvasElement;
+      { const g = cv.getContext('2d')!; g.beginPath(); for (let i = 0; i <= 180; i++) { const th = (i / 180) * Math.PI * 2, r = 19 * sectionMul(sh, th); const x = 22 + r * Math.cos(th), y = 22 - r * Math.sin(th); if (i) g.lineTo(x, y); else g.moveTo(x, y); } g.closePath(); g.fillStyle = 'rgba(239,108,42,0.18)'; g.fill(); g.strokeStyle = '#ef6c2a'; g.lineWidth = 1.5; g.stroke(); }
+      const b = h('button', { class: `mxs-chip${c.shape === sh.id ? ' on' : ''}` }, cv, h('span', {}, sh.name));
+      b.onclick = () => { Object.assign(c, { shape: sh.id, section: sh.section, sides: sh.sides, depth: sh.depth }); dChange(); renderPanel(); };
+      gal.append(b);
+    }
+    const ch = () => dChange();
+    right.append(group('Coaster shape', gal,
+      c.section !== 'round' ? row('Sides / lobes', num(() => c.sides, (v) => (c.sides = v), 3, 40, 1, '', ch)) : null,
+      c.section !== 'round' && c.section !== 'faceted' ? row('Shape depth', num(() => c.depth, (v) => (c.depth = v), 0, 0.5, 0.01, '', ch)) : null));
+    right.append(group('Plates',
+      row('Size', num(() => c.diameter, (v) => (c.diameter = v), 60, 160, 1, 'mm', ch), 'Across the corners.'),
+      row('Thickness', num(() => c.thickness, (v) => (c.thickness = v), 2, 10, 0.2, 'mm', ch)),
+      row('How many', num(() => c.count, (v) => (c.count = Math.round(v)), 1, 12, 1, '', ch))));
+    right.append(group('Case',
+      row('Make a case', toggle(() => c.caseOn, (v) => (c.caseOn = v), () => { ch(); renderPanel(); })),
+      c.caseOn ? row('Gap to plates', num(() => c.gap, (v) => (c.gap = v), 0.4, 3, 0.1, 'mm', ch), 'Clearance all round so plates lift out easily.') : null,
+      c.caseOn ? row('Wall', num(() => c.wall, (v) => (c.wall = v), 1.2, 6, 0.1, 'mm', ch)) : null,
+      c.caseOn ? row('Floor', num(() => c.floor, (v) => (c.floor = v), 1, 5, 0.1, 'mm', ch)) : null,
+      c.caseOn ? row('Finger notch', num(() => c.notch, (v) => (c.notch = v), 0, 80, 1, 'mm', ch), '0 = no notch.') : null,
+      c.caseOn ? h('p', { class: 'mxs-hint' }, `Case is ${caseHeight(c).toFixed(1)} mm tall: floor + ${c.count} × ${c.thickness} mm plates + 1.5 mm headroom.`) : null));
+    right.append(group('Pattern', h('p', { class: 'mxs-hint mxs-keep' }, 'Pick any relief in the Relief tab, then choose Raised, Carved or Cut through. The Nets group has open patterns made for cut-through coasters.')));
+  }
   function designPanel() {
     right.append(seg([['shape', 'Shape'], ['relief', 'Relief'], ['look', 'Appearance']], () => S.designTab, (v) => { S.designTab = v; renderPanel(); }));
+    if (S.designTab === 'shape' && D().family === 'coaster' && D().coaster) { coasterShapePanel(); return; }
     if (S.designTab === 'shape') {
       const editor = profileEditor();
       right.append(group('Piece profile', editor.el,
@@ -575,8 +605,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       if (rl.kind !== 'smooth') {
         const custom = !RELIEFS.some((x) => x.id === rl.kind);
         right.append(group(`Edit · ${ALL_RELIEFS.find((x) => x.id === rl.kind)?.name ?? (rl.kind === 'image' ? 'Imported' : rl.kind)}`,
-          row('Relief on', seg<'outside' | 'inside' | 'both'>([['outside', 'Outside'], ['inside', 'Inside'], ['both', 'Both']], () => rl.side ?? 'outside', (v) => { rl.side = v; dChange(); renderPanel(); })),
-          row('Direction', seg<'raised' | 'carved'>([['raised', 'Raised'], ['carved', 'Carved']], () => (rl.depth < 0 ? 'carved' : 'raised'), (v) => { rl.depth = Math.abs(rl.depth) * (v === 'carved' ? -1 : 1); dChange(); renderPanel(); })),
+          D().coaster ? row('Relief', seg<'emboss' | 'deboss' | 'through'>([['emboss', 'Raised'], ['deboss', 'Carved'], ['through', 'Cut through']], () => D().coaster!.mode, (v) => { D().coaster!.mode = v; dChange(); renderPanel(); })) : null,
+          D().coaster ? row('Plain border', num(() => D().coaster!.border, (v) => (D().coaster!.border = v), 0, 20, 0.5, 'mm', dChange)) : null,
+          D().coaster ? null : row('Relief on', seg<'outside' | 'inside' | 'both'>([['outside', 'Outside'], ['inside', 'Inside'], ['both', 'Both']], () => rl.side ?? 'outside', (v) => { rl.side = v; dChange(); renderPanel(); })),
+          D().coaster ? null : row('Direction', seg<'raised' | 'carved'>([['raised', 'Raised'], ['carved', 'Carved']], () => (rl.depth < 0 ? 'carved' : 'raised'), (v) => { rl.depth = Math.abs(rl.depth) * (v === 'carved' ? -1 : 1); dChange(); renderPanel(); })),
           row(rl.kind === 'image' ? 'Repeats around' : 'Count around', num(() => rl.count, (v) => (rl.count = v), 1, Math.max(2, Math.floor((Math.PI * D().maxDiameter) / (NZ().minFeature * 1.5))), 1, '', dChange), `Up to ${Math.max(2, Math.floor((Math.PI * D().maxDiameter) / (NZ().minFeature * 1.5)))} round this piece with a ${NZ().d} mm nozzle`),
           row('Depth', num(() => rl.depth, (v) => (rl.depth = v), -8, 8, 0.1, 'mm', dChange), Math.abs(rl.depth) > D().wall * 1.5 ? `Deeper than ${(D().wall * 1.5).toFixed(1)} mm thins the wall.` : 'Negative depth carves in.'),
           custom ? row('Edge softness', num(() => rl.edge ?? 0.15, (v) => (rl.edge = v), 0, 1, 0.01, '', dChange), '0 = knife-sharp edges.') : null,
@@ -589,7 +621,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
           rl.kind === 'image' ? row('Style', seg<'vector' | 'shades'>([['vector', 'Sharp outline'], ['shades', 'Shades (photo)']], () => (rl.mapVector === false ? 'shades' : 'vector'), (v) => { rl.mapVector = v === 'vector'; dChange(); renderPanel(); })) : null,
           rl.kind === 'image' ? row('Placement', select<'tile' | 'band'>([['tile', 'Tile (square cells)'], ['band', 'Fit the range height']], () => rl.mapMode ?? 'tile', (v) => (rl.mapMode = v), () => { dChange(); renderPanel(); })) : null,
           rl.kind === 'image' && rl.mapMode === 'band' ? row('Repeats up', num(() => rl.tilesUp ?? 1, (v) => (rl.tilesUp = v), 1, 50, 1, '', dChange)) : null,
-          h('div', { class: 'mxs-sub' }, h('b', {}, 'Range (where it applies)'),
+          D().coaster ? null : h('div', { class: 'mxs-sub' }, h('b', {}, 'Range (where it applies)'),
             row('Start', num(() => rl.start * 100, (v) => (rl.start = v / 100), 0, 100, 1, '%', dChange)),
             row('End', num(() => rl.end * 100, (v) => (rl.end = v / 100), 0, 100, 1, '%', dChange)),
             row('Transition', num(() => rl.transition * 100, (v) => (rl.transition = v / 100), 0, 30, 1, '%', dChange)))));

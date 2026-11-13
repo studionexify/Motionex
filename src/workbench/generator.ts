@@ -106,6 +106,7 @@ function inset(pts: [number, number][], d: number): [number, number][] {
 }
 
 export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], brushes: (id: string) => MotionBrush | undefined, rules: Rule[] = []): GenResult {
+  if (design.family === 'coaster') return { gcode: '', segs: [], layers: 1, layerStart: [0], layerZ: [0], warnings: ['Coaster sets are not sliced in Motionex yet: use Export model (STL) and slice the plates and case in your usual slicer.'], stats: { lengthMm: 0, filamentMm: 0, grams: 0, seconds: 0, lines: 0, maxOffset: 0 } };
   // Keep every setting within what the nozzle can print (a 1 mm nozzle cannot lay a 5 mm bead).
   const NZ = nozzleLimits(s0.nozzle ?? 0.4, s0.printer);
   const clampN = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));

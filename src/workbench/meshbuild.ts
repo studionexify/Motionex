@@ -4,6 +4,7 @@
 // and normals are smooth across curves but split at real creases (> 25°), so edges read sharp.
 import { surfaceGrid, triangulate } from './surfacegrid';
 import { faceMesh } from './tessellate';
+import { caseMesh, plateMesh } from './coaster';
 import { surfaceParts, type Design } from './design';
 
 export type MeshQuality = 'quick' | 'view' | 'export';
@@ -57,7 +58,30 @@ export interface BuiltMesh {
   triangles: number;
 }
 
+/** Coaster set: the case (if on) with one plate beside it in the view; every plate laid out for export. */
+function buildCoaster(d: Design, q: MeshQuality): BuiltMesh {
+  const c = d.coaster!;
+  const step = q === 'quick' ? 1.0 : q === 'view' ? 0.4 : 0.22;
+  const parts: { pos: number[]; idx: number[]; dx: number; dy: number }[] = [];
+  const plate = plateMesh(d, step), R = c.diameter / 2, Rc = R + c.gap + c.wall;
+  if (c.caseOn) for (const m of caseMesh(d, step)) parts.push({ ...m, dx: 0, dy: 0 });
+  const startX = c.caseOn ? Rc + R + 12 : 0;
+  const n = q === 'export' ? c.count : 1, perRow = Math.max(1, Math.ceil(Math.sqrt(n)));
+  for (let k = 0; k < n; k++) parts.push({ ...plate, dx: startX + (k % perRow) * (2 * R + 8), dy: Math.floor(k / perRow) * (2 * R + 8) });
+  let nv = 0, ni = 0; for (const p of parts) { nv += p.pos.length / 3; ni += p.idx.length; }
+  const pos = new Float32Array(nv * 3), idx = new Uint32Array(ni);
+  let ov = 0, oi = 0;
+  for (const p of parts) {
+    const v0 = ov;
+    for (let k = 0; k < p.pos.length; k += 3) { pos[ov * 3] = p.pos[k] + p.dx; pos[ov * 3 + 1] = p.pos[k + 1] + p.dy; pos[ov * 3 + 2] = p.pos[k + 2]; ov++; }
+    for (const i of p.idx) idx[oi++] = i + v0;
+  }
+  const { position, normal } = creasedNormals(pos, idx, Math.cos((25 * Math.PI) / 180));
+  return { position, normal, src: new Uint32Array(idx.length), outer: { rows: 1, cols: 1, pos: new Float32Array(6) }, inner: { rows: 1, cols: 1 }, triangles: idx.length / 3 };
+}
+
 export function buildMesh(d: Design, q: MeshQuality): BuiltMesh {
+  if (d.family === 'coaster' && d.coaster) return buildCoaster(d, q);
   // both faces share the angular division (the rim joins them point for point)
   const o = gridSize(d, q, 'outer'), i2 = gridSize(d, q, 'inner'), cols = Math.max(o.cols, i2.cols);
   const W = cols + 1, G = (o.rows + 1) * W, G2 = (i2.rows + 1) * W;

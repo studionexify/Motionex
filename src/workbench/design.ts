@@ -2,7 +2,7 @@
 // a top-down section, twist / narrowing, and a surface relief. surfaceR(z, θ) is the one function the
 // mesh, the estimate and the slicer all read, so what you see is what gets printed.
 
-export type Family = 'vase' | 'pendant' | 'shade' | 'bowl';
+export type Family = 'vase' | 'pendant' | 'shade' | 'bowl' | 'coaster';
 export type SectionKind = 'round' | 'faceted' | 'square' | 'petal' | 'star' | 'fluted' | 'flower' | 'teeth';
 export type BaseRelief = 'smooth' | 'ribbed' | 'grooves' | 'fins' | 'rings' | 'wavy' | 'guilloche' | 'vwaves' | 'bubbles' | 'bumps' | 'pyramid' | 'diamond' | 'hammered' | 'sand';
 /** A built-in relief, a pattern id from reliefs.ts, or 'image' (imported picture / SVG / DXF / text). */
@@ -18,6 +18,7 @@ export interface Relief {
   /** Edge softness 0 (knife-sharp) … 1 (rounded). */
   edge?: number;
 }
+import { coasterEstimate, defaultCoaster, type CoasterSet } from './coaster';
 import { bevelH, geoSd, mapGeo, patternGeo, type Geo } from './patterngeo';
 import { PATTERNS, patternById, sampleMapCubic, sampleMapVector, setEdge, setMinLine, type HeightMap } from './reliefs';
 export type TwistShape = 'linear' | 's' | 'wave';
@@ -40,6 +41,8 @@ export interface Design {
   relief: Relief;
   wall: number;          // mm, for the STL wall and estimate
   openBottom: boolean;
+  /** Coaster set (family 'coaster'): plates, their shape and the case. */
+  coaster?: CoasterSet;
 }
 
 const TAU = Math.PI * 2;
@@ -76,6 +79,7 @@ export const FAMILIES: { id: Family; name: string; h: number; d: number; outline
   { id: 'pendant', name: 'Pendant', h: 160, d: 220, outline: 'dome', hint: 'Lamp shade that hangs. Print it upside down (flip in the slicer).' },
   { id: 'shade', name: 'Table shade', h: 200, d: 220, outline: 'drum', hint: 'Open-ended drum for a table lamp.' },
   { id: 'bowl', name: 'Bowl & tray', h: 70, d: 180, outline: 'bowl', hint: 'Low, wide pieces.' },
+  { id: 'coaster', name: 'Coasters', h: 40, d: 100, outline: 'cylinder', hint: 'A set of flat coasters and a case that holds them.' },
 ];
 
 export const SECTIONS: { id: SectionKind; name: string }[] = [
@@ -106,7 +110,8 @@ export function defaultDesign(family: Family = 'vase'): Design {
   return {
     name: 'Untitled piece', family, outline: o.id, profile: structuredClone(o.pts), smoothing: 0.8,
     height: o.h ?? f.h, maxDiameter: o.d ?? f.d, section: 'round', sides: 8, depth: 0.15, twist: 0, twistShape: 'linear', narrowTop: 0,
-    relief: { kind: 'smooth', count: 0, depth: 0, start: 0, end: 1, transition: 0.06 }, wall: 1.5, openBottom: family === 'shade' || family === 'pendant',
+    relief: family === 'coaster' ? { kind: 'hexcells', count: 8, depth: 1, start: 0, end: 1, transition: 0.06 } : { kind: 'smooth', count: 0, depth: 0, start: 0, end: 1, transition: 0.06 }, wall: 1.5, openBottom: family === 'shade' || family === 'pendant',
+    ...(family === 'coaster' ? { coaster: defaultCoaster() } : {}),
   };
 }
 
@@ -129,7 +134,7 @@ export function profileR(d: Design, t: number, pts = sortedProfile(d)): number {
   return Math.max(0.02, lin + (cr - lin) * d.smoothing);
 }
 
-function sectionMul(d: Design, th: number): number {
+export function sectionMul(d: Pick<Design, 'sides' | 'depth' | 'section'>, th: number): number {
   const n = Math.max(3, Math.round(d.sides)), k = d.depth;
   switch (d.section) {
     case 'round': return 1;
@@ -277,6 +282,10 @@ export function makeInner(d: Design) {
 
 /** Quick numbers for the estimate card (single-wall, spiral). */
 export function estimate(d: Design, lineWidth = 0.5, layer = 0.24, speed = 40) {
+  if (d.family === 'coaster' && d.coaster) {
+    const e = coasterEstimate(d.coaster), c = d.coaster, span = c.caseOn ? 2 * (c.diameter / 2 + c.gap + c.wall) : c.diameter;
+    return { maxDiameter: span, seconds: e.seconds, grams: e.grams, meters: e.grams / 1.24 / 2.4, warnings: [] as string[] };
+  }
   const surf = makeSurface(d);
   let area = 0, maxR = 0, minR = Infinity;
   const NZ = 60, NT = 180;
@@ -380,7 +389,7 @@ function geoOf(d: Design, _cell: number, raw: boolean): Geo | null {
 }
 /** Hybrid pattern: the formula's own height away from edges; across a jump edge a straight bevel between the
  *  heights just inside and just outside it (sampled along the edge normal). */
-function hybridHeight(g: Geo, fn: (u: number, v: number, s: number) => number, seed: number, u: number, v: number, cell: number, bev: number) {
+export function hybridHeight(g: Geo, fn: (u: number, v: number, s: number) => number, seed: number, u: number, v: number, cell: number, bev: number) {
   const lv = g.levels[0], sd = geoSd(g, lv, u, v), half = bev / 2 / cell;
   if (Math.abs(sd) >= half) return clamp(fn(u, v, seed), 0, 1);
   const e = 0.5 / 128, gx = geoSd(g, lv, u + e, v) - geoSd(g, lv, u - e, v), gy = geoSd(g, lv, u, v + e) - geoSd(g, lv, u, v - e), gl = Math.hypot(gx, gy) || 1;
@@ -390,7 +399,7 @@ function hybridHeight(g: Geo, fn: (u: number, v: number, s: number) => number, s
   const k = bevelH(sd * cell, bev);
   return hOut + (hIn - hOut) * k;
 }
-function geoHeight(g: Geo, u: number, v: number, cell: number, bev: number) {
+export function geoHeight(g: Geo, u: number, v: number, cell: number, bev: number) {
   let f = g.base;
   for (const lv of g.levels) f += lv.step * bevelH(geoSd(g, lv, u, v) * cell, bev);
   return f;
@@ -409,4 +418,27 @@ export function reliefEdges(d: Design, t: number, th: number, R: number): { sd: 
   const uu = u + vv * Math.tan(((rl.slant ?? 0) * Math.PI) / 180) + Math.floor(vv) * (rl.rowShift ?? 0);
   const y = rl.kind !== 'image' ? vv : rl.mapMode === 'band' ? 1 - frac(clamp((t - rl.start) / Math.max(1e-3, rl.end - rl.start), 0, 0.9999) * Math.max(1, rl.tilesUp ?? 1)) : 1 - frac(vv);
   return { sd: gp.levels.map((lv) => geoSd(gp, lv, uu, y) * cell), bev: bevelOf(rl, cellMaxOf(d)) };
+}
+
+/** Pattern sampler for flat pieces (coasters): u, v in pattern cells, cellMM the cell size. */
+export function planarPattern(rl: Relief, cellMM: number) {
+  const n = Math.max(1, Math.round(rl.count));
+  const pseudo = { relief: rl, maxDiameter: (cellMM * n) / Math.PI } as Design;
+  const g = geoOf(pseudo, cellMM, false), p = rl.kind === 'image' ? null : patternById(rl.kind), seed = rl.seed ?? 1;
+  const bev = bevelOf(rl, cellMM);
+  const height = (u: number, v: number): number => {
+    let f: number;
+    if (rl.kind === 'image') {
+      if (!rl.map) return 0;
+      const y = 1 - frac(v);
+      f = g ? geoHeight(g, u, y, cellMM, bev) : sampleMapCubic(rl.map, u, y);
+    } else if (!p) return 0;
+    else if (g?.hybrid) f = hybridHeight(g, p.fn, seed, u, v, cellMM, bev);
+    else if (g) f = geoHeight(g, u, v, cellMM, bev);
+    else f = clamp(p.fn(u, v, seed), 0, 1);
+    if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1);
+    return rl.invert ? 1 - f : f;
+  };
+  const edges = (u: number, v: number): number[] | null => (g ? g.levels.map((lv) => geoSd(g, lv, u, rl.kind === 'image' ? 1 - frac(v) : v) * cellMM) : null);
+  return { height, edges, bev, sharp: !!g, levels: g ? g.levels.length : 0 };
 }
