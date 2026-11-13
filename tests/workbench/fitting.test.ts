@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SLICE, slice } from '../../src/workbench/generator';
-import { defaultDesign, makeInner, OUTLINES, SECTIONS, surprise, type Design } from '../../src/workbench/design';
+import { defaultDesign, estimate, makeInner, OUTLINES, SECTIONS, surprise, type Design } from '../../src/workbench/design';
 import { bulbFit, bulbPlace, fitOpening, fittingOf, fittingWarnings, holeDia, requiredFlip, SEAT_HOLDERS, seatNeed, seatOf, bulbsFor } from '../../src/workbench/fitting';
 import { applyStand, buildStand, sliceStand, standSection, standSoup, STANDS } from '../../src/workbench/stand';
 import { buildMesh, meshToStl } from '../../src/workbench/meshbuild';
@@ -118,8 +118,9 @@ describe('lamp holder seat', () => {
 describe('table shade stands', () => {
   const kinds = STANDS.filter((t) => t.id !== 'none');
   it('offers a long list of stands', () => { expect(kinds.length).toBeGreaterThanOrEqual(12); });
-  it.each(kinds.map((t) => [t.id]))('%s: fits the shade, holds the holder, prints without support', (id) => {
-    const d = defaultDesign('shade'); d.fitting = fittingOf(d); applyStand(d.fitting, id as never); d.part = 'stand';
+  const cases = kinds.flatMap((t) => (['light', 'standard', 'heavy'] as const).map((b) => [t.id, b] as [string, 'light' | 'standard' | 'heavy']));
+  it.each(cases)('%s (%s): fits the shade, holds the holder, prints without support', (id, build) => {
+    const d = defaultDesign('shade'); d.fitting = fittingOf(d); applyStand(d.fitting, id as never); d.fitting.build = build; d.part = 'stand';
     const m = buildStand(d)!;
     const f = fittingOf(d);
     // the spigot fits inside the shade with a small clearance; the seat cone is wider than the shade's inside
@@ -153,6 +154,7 @@ describe('table shade stands', () => {
     }
     // the feet end flat at the full height
     expect(areaTotal(standSection(m, m.height - 0.05))).toBeGreaterThan(50);
+    if (build !== 'standard' && id !== 'tripod' && id !== 'square' && id !== 'drum') return; // slicing is checked on a subset
     // mesh and G-code
     const soup = standSoup(m); let zmax = 0; for (let k = 2; k < soup.length; k += 3) { expect(Number.isFinite(soup[k])).toBe(true); zmax = Math.max(zmax, soup[k]); }
     expect(zmax).toBeCloseTo(m.height, 3);
@@ -164,13 +166,25 @@ describe('table shade stands', () => {
     // printed volume ≈ solid volume
     let vol = 0; for (let z = 0.15; z < m.height; z += 0.3) vol += areaTotal(standSection(m, z)) * 0.3;
     const printed = r.stats.filamentMm * Math.PI * (S.filamentDia / 2) ** 2 / S.flowRatio;
-    expect(printed / vol).toBeGreaterThan(0.9); expect(printed / vol).toBeLessThan(1.08);
+    expect(printed / vol).toBeGreaterThan(0.9); expect(printed / vol).toBeLessThan(build === 'light' ? 1.12 : 1.08); // thin hollow walls overlap a little more
     // every extruded point is inside the solid
     const cx = S.bedX / 2, cy = S.bedY / 2;
     const secs = new Map<number, ReturnType<typeof standSection>>();
     let outside = 0, n = 0;
     for (const g of r.segs) { if (g.kind === 'travel' || g.layer < 1 || g.layer % 7) continue; let sec = secs.get(g.layer); if (!sec) { sec = standSection(m, r.layerZ[g.layer] - 0.15); secs.set(g.layer, sec); } n++; if (!pointIn(g.x - cx, g.y - cy, sec)) outside++; }
     expect(n).toBeGreaterThan(100); expect(outside).toBe(0);
+  });
+  it('light, standard and heavy builds really differ in weight; light legs are hollow, heavy legs have pads', () => {
+    const grams = (b: 'light' | 'standard' | 'heavy', id = 'tripod') => { const d = defaultDesign('shade'); d.fitting = fittingOf(d); applyStand(d.fitting, id as never); d.fitting.build = b; d.part = 'stand'; return { m: buildStand(d)!, g: estimate(d, 0.45, 0.2, 40).grams }; };
+    for (const id of ['tripod', 'four', 'square', 'drum', 'cone']) {
+      const L = grams('light', id).g, M = grams('standard', id).g, Hv = grams('heavy', id).g;
+      expect(L, id).toBeLessThan(M * (id === 'drum' || id === 'cone' ? 0.97 : 0.85)); expect(Hv, id).toBeGreaterThan(M * 1.25);
+    }
+    const light = grams('light').m, mid = light.deck + (light.height - light.deck) / 2;
+    const sec = standSection(light, mid), solid = standSection(grams('standard').m, mid);
+    expect(areaTotal(sec)).toBeLessThan(areaTotal(solid) * 0.75);   // the legs are tubes
+    const heavy = grams('heavy').m;
+    expect(areaTotal(standSection(heavy, heavy.height - 0.1))).toBeGreaterThan(areaTotal(standSection(grams('standard').m, heavy.height - 0.1)) * 2);
   });
   it('the shade on a stand has no seat of its own and prints upright; the stand never flips', () => {
     const d = defaultDesign('shade');

@@ -65,22 +65,25 @@ export function buildStand(d: Design): StandModel | null {
   const Rs = Math.max(12, Math.min(minInner(d, 0), minInner(d, hs / 2), minInner(d, hs)) - 0.3);
   const step = clamp(d.wall + 1.5, 2.5, 6), Rf = Rs + step, zc1 = hs + step, deck = zc1 + 2;
   const clear = clamp(f.standHeight, 20, 400), H = deck + clear, L = H - zc1;
-  const size = clamp(f.legSize, 5, 40), N = Math.round(clamp(f.legs || type.legs, 3, 12)), splay = clamp(f.splay, 0, 35);
+  const build = f.build ?? 'standard', light = build === 'light', heavy = build === 'heavy';
+  const size = clamp(f.legSize * (light ? 0.85 : heavy ? 1.35 : 1), 5, 54), N = Math.round(clamp(f.legs || type.legs, 3, 12)), splay = clamp(f.splay, 0, 35);
   const prims: Prim[] = [];
 
   const seat = f.seat !== 'none', holeR = seat ? holeDia(f) / 2 : 0, hubR = holeR + seatLand(f) + 2;
   const T = Math.min(deck, clamp(f.thickness, 1.2, 8));
-  const leg = type.leg, wall = Math.max(2.4, size * 0.22);
+  const leg = type.leg, wall = light ? 1.8 : Math.max(2.4, size * (heavy ? 0.36 : 0.22));
   const halfTop = leg ? (size * leg.d0) / 2 : wall / 2;
   // rim wide enough to carry the leg tops; a small shade gets a solid deck instead of hub + spokes
-  let rimIn = Math.min(Rs - 8, Rf - 2 * halfTop);
-  const solid = rimIn < hubR + 4;
+  // leg centre line: the leg (square corners too) stays on the flange, and the rim reaches under its inner edge
+  const Rc0 = Math.sqrt(Math.max(0, Rf * Rf - halfTop * halfTop)) - halfTop - 0.2;
+  let rimIn = Math.min(Rs - 8, Rc0 - halfTop - 0.5);
+  const solid = heavy || rimIn < hubR + 4;
   if (solid) rimIn = seat ? holeR : Math.max(0, rimIn);
   if (seat && Rs < holeR + seatLand(f)) warnings.push(`The shade is only Ø${(Rs * 2).toFixed(0)} mm inside at the bottom: too small for the Ø${(holeR * 2).toFixed(1)} mm holder hole and its ring.`);
   prims.push(tube(0, hs, Rs, Rs, rimIn, rimIn), tube(hs, zc1, Rs, Rf, rimIn, rimIn), tube(zc1, deck, Rf, Rf, rimIn, rimIn));
   if (seat && !solid) {
     prims.push(tube(0, T, hubR, hubR, holeR, holeR));
-    const ns = Math.max(3, Math.min(6, leg ? N : 4)), r0 = hubR - 1.5, r1 = rimIn + 1.5, hw = 4;
+    const ns = light ? 3 : Math.max(3, Math.min(6, leg ? N : 4)), r0 = hubR - 1.5, r1 = rimIn + 1.5, hw = light ? 3 : 4;
     for (let i = 0; i < ns; i++) {
       const a = (i / ns) * TAU + Math.PI / 2, c = Math.cos(a), s = Math.sin(a);
       const q: Pt[] = [[r0 * c + hw * s, r0 * s - hw * c], [r1 * c + hw * s, r1 * s - hw * c], [r1 * c - hw * s, r1 * s + hw * c], [r0 * c - hw * s, r0 * s + hw * c]];
@@ -90,7 +93,7 @@ export function buildStand(d: Design): StandModel | null {
 
   let radius = Rf;
   if (leg) {
-    const tanS = Math.tan(rad(splay)), Rc0 = Rf - halfTop;
+    const tanS = Math.tan(rad(splay));
     const off = (u: number) => leg.curve === 'sabre' ? L * tanS * u * u : leg.curve === 'cabriole' ? L * tanS * (0.6 * Math.sin(Math.PI * u) + 0.3 * u) : L * tanS * u;
     const twist = leg.curve === 'twist' ? Math.min(Math.PI / 3, (0.5 * L) / Math.max(20, Rc0)) : 0;
     const K = leg.curve === 'line' ? 1 : 14, ht = Math.max(1.6, size * 0.18);
@@ -101,7 +104,34 @@ export function buildStand(d: Design): StandModel | null {
       const t = leg.shape === 'blade' ? ht : h; // half size across the radius
       return ([[-h, -t], [h, -t], [h, t], [-h, t]] as Pt[]).map(([x, y]) => [rc * c + x * c - y * s, rc * s + x * s + y * c] as Pt);
     };
-    for (let i = 0; i < N; i++) for (let k = 0; k < K; k++) prims.push(loft(zc1 + (L * k) / K, zc1 + (L * (k + 1)) / K, outline(i, k / K), outline(i, (k + 1) / K)));
+    // light: hollow legs, a 2.4 mm wall around a void that opens at the foot (the deck closes the other end)
+    const LW = 2.4, hollow = (i: number, u: number): Pt[] | null => {
+      if (!light) return null;
+      const a = (i / N) * TAU + Math.PI / 2 + twist * u, c = Math.cos(a), s = Math.sin(a), rc = Rc0 + off(u), h = (size * lerp(leg.d0, leg.d1, u)) / 2 - LW;
+      if (leg.shape === 'round') return h > 1.2 ? circle(h, 28, rc * c, rc * s) : null;
+      const t = (leg.shape === 'blade' ? ht : (size * lerp(leg.d0, leg.d1, u)) / 2) - LW;
+      return h > 1.2 && t > 1.2 ? ([[-h, -t], [h, -t], [h, t], [-h, t]] as Pt[]).map(([x, y]) => [rc * c + x * c - y * s, rc * s + x * s + y * c] as Pt) : null;
+    };
+    for (let i = 0; i < N; i++) for (let k = 0; k < K; k++) {
+      const u0 = k / K, u1 = (k + 1) / K, p = loft(zc1 + L * u0, zc1 + L * u1, outline(i, u0), outline(i, u1));
+      const h0 = hollow(i, u0), h1 = hollow(i, u1);
+      if (h0 && h1) { p.ha = h0; p.hb = h1; }
+      prims.push(p);
+    }
+    // heavy: a foot pad on every leg, flaring at 45° (printed upward, so it needs no support)
+    if (heavy) {
+      const padH = Math.min(8, clear * 0.12);
+      for (let i = 0; i < N; i++) {
+        // the pad starts on the leg where it is at the pad's base, and its growth plus the leg's own lean stays within 45°
+        const up = clamp((H - padH - zc1) / L, 0, 1), o0 = outline(i, up), o = outline(i, 1);
+        const cen = (q: Pt[]): Pt => [q.reduce((a, v) => a + v[0], 0) / q.length, q.reduce((a, v) => a + v[1], 0) / q.length];
+        const [ax, ay] = cen(o0), [cx0, cy0] = cen(o), shift = Math.hypot(cx0 - ax, cy0 - ay) / padH;
+        const h1 = (size * leg.d1) / 2, g = (h1 + padH * Math.max(0, 0.9 - shift)) / h1;
+        const big = o.map(([x, y]) => [cx0 + (x - cx0) * g, cy0 + (y - cy0) * g] as Pt);
+        prims.push(loft(H - padH, H, o0, big));
+        radius = Math.max(radius, Math.hypot(cx0, cy0) + h1 * g);
+      }
+    }
   } else {
     // pedestal: a wall on castle feet, so the cable can leave between the feet
     const fh = Math.min(14, clear * 0.3), zf = H - fh, Lb = zf - zc1;

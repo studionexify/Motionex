@@ -12,7 +12,7 @@ import { DEFAULT_SLICE, nozzleLimits, unpackSegs, wallLines, motionSamples, newZ
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
 import { compensate, physicsFor, simulate, type Physics, type PrintSim } from './physics';
-import { bulbsFor, defaultFitting, fitOpening, fittingOf, fittingWarnings, holeDia, isLamp, isStandPart, requiredFlip, SEATS, SEAT_HOLDERS, seatNeed, seatOf, minInner, type SeatKind, type StandKind } from './fitting';
+import { BUILDS, bulbsFor, defaultFitting, fitOpening, fittingOf, fittingWarnings, holeDia, isLamp, isStandPart, requiredFlip, SEATS, SEAT_HOLDERS, seatNeed, seatOf, minInner, type SeatKind, type StandKind } from './fitting';
 import { applyStand, partSize, STANDS } from './stand';
 import { holderById } from '../plugins/lumonex/catalog';
 
@@ -548,6 +548,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       if (onStand) {
         const ped = !!STANDS.find((t) => t.id === f.stand)?.pedestal;
         kids.push(
+          row('Build', seg(BUILDS.map((b) => [b.id, b.name] as [string, string]), () => f.build ?? 'standard', (v) => { F().build = v as typeof f.build; dChange(); renderPanel(); }), BUILDS.find((b) => b.id === (f.build ?? 'standard'))?.hint),
           row('Clear height', num(() => f.standHeight, (v) => { F().standHeight = v; }, 30, 250, 1, 'mm', dChange), 'Room under the deck for the holder and cable.'),
           row(ped ? 'Feet' : 'Legs', num(() => f.legs, (v) => { F().legs = v; }, 3, 8, 1, '', dChange)),
           f.stand !== 'drum' && f.stand !== 'hourglass' ? row('Lean', num(() => f.splay, (v) => { F().splay = v; }, 0, 30, 1, '°', dChange)) : null,

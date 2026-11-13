@@ -34,7 +34,16 @@ export interface Fitting {
   splay: number;
   /** Leg thickness (mm). */
   legSize: number;
+  /** Stand build: 'light' = hollow legs and a slim deck (fast, little filament); 'heavy' = thicker legs with
+   *  foot pads and a solid deck (weight low down, hard to tip); 'standard' in between. */
+  build?: StandBuild;
 }
+export type StandBuild = 'light' | 'standard' | 'heavy';
+export const BUILDS: { id: StandBuild; name: string; hint: string }[] = [
+  { id: 'light', name: 'Light', hint: 'Hollow legs (2.4 mm walls), slimmer legs and three thin spokes: fastest print, least filament. For light shades.' },
+  { id: 'standard', name: 'Standard', hint: 'Solid legs, four spokes.' },
+  { id: 'heavy', name: 'Heavy', hint: 'Legs 35 % thicker with 45° foot pads and a solid deck: more weight low down, hard to tip. For wide or heavy shades.' },
+];
 
 export const SEATS: { id: SeatKind; name: string; hint: string }[] = [
   { id: 'none', name: 'None', hint: 'Plain shade, no lamp holder seat.' },
@@ -56,7 +65,7 @@ export function defaultFitting(family: Family): Fitting {
   const lamp = family === 'pendant' || family === 'shade';
   return {
     seat: lamp ? 'ring' : 'none', holder: 'e27', bulb: 'a60', hole: 0, clearance: 0.3, thickness: 3, showBulb: true,
-    stand: family === 'shade' ? 'tripod' : 'none', standHeight: 95, legs: 3, splay: 15, legSize: 13,
+    stand: family === 'shade' ? 'tripod' : 'none', standHeight: 95, legs: 3, splay: 15, legSize: 13, build: 'standard',
   };
 }
 /** The design's fitting (older saved pieces have none: they get the default for their family). */
