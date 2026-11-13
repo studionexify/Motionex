@@ -19,6 +19,8 @@ export interface Relief {
   edge?: number;
 }
 import { PATTERNS, patternById, sampleMapCubic, sampleMapVector, setEdge, type HeightMap } from './reliefs';
+import { defaultFitting, fitOpening, seatOf, type Fitting } from './fitting';
+import { standEstimate } from './stand';
 export type TwistShape = 'linear' | 's' | 'wave';
 
 export interface ProfilePoint { r: number; t: number } // r: 0..1 of max radius, t: 0..1 of height
@@ -39,6 +41,10 @@ export interface Design {
   relief: Relief;
   wall: number;          // mm, for the STL wall and estimate
   openBottom: boolean;
+  /** Lamp fitting (pendants and table shades): holder seat, bulb, stand. See fitting.ts. */
+  fitting?: Fitting;
+  /** Which printed part is shown and sliced: the piece itself or the table shade's stand. */
+  part?: 'piece' | 'stand';
 }
 
 const TAU = Math.PI * 2;
@@ -102,11 +108,13 @@ export const RELIEFS: { id: ReliefKind; name: string; group: string; count: numb
 export function defaultDesign(family: Family = 'vase'): Design {
   const f = FAMILIES.find((x) => x.id === family)!;
   const o = OUTLINES.find((x) => x.id === f.outline)!;
-  return {
+  const d: Design = {
     name: 'Untitled piece', family, outline: o.id, profile: structuredClone(o.pts), smoothing: 0.8,
     height: o.h ?? f.h, maxDiameter: o.d ?? f.d, section: 'round', sides: 8, depth: 0.15, twist: 0, twistShape: 'linear', narrowTop: 0,
     relief: { kind: 'smooth', count: 0, depth: 0, start: 0, end: 1, transition: 0.06 }, wall: 1.5, openBottom: family === 'shade' || family === 'pendant',
   };
+  if (family === 'shade' || family === 'pendant') { d.fitting = defaultFitting(family); fitOpening(d); }
+  return d;
 }
 
 // ── profile curve: blend of polyline and Catmull-Rom by smoothing
@@ -249,6 +257,7 @@ export function makeInner(d: Design) {
 
 /** Quick numbers for the estimate card (single-wall, spiral). */
 export function estimate(d: Design, lineWidth = 0.5, layer = 0.24, speed = 40) {
+  if (d.part === 'stand') { const e = standEstimate(d, lineWidth, layer, speed); if (e) return e; }
   const surf = makeSurface(d);
   let area = 0, maxR = 0, minR = Infinity;
   const NZ = 60, NT = 180;
@@ -259,7 +268,9 @@ export function estimate(d: Design, lineWidth = 0.5, layer = 0.24, speed = 40) {
     area += per * (d.height / NZ);
   }
   const pathLen = area / layer;
-  const vol = area * lineWidth + (d.openBottom ? 0 : Math.PI * (profileR(d, 0) * d.maxDiameter / 2) ** 2 * 1.2);
+  const seat = seatOf(d);
+  const seatVol = seat ? Math.max(0, Math.PI * ((profileR(d, seat.top ? 1 : 0) * (seat.top ? 1 - d.narrowTop : 1) * d.maxDiameter / 2) ** 2 - seat.holeR ** 2)) * (seat.z1 - seat.z0) : 0;
+  const vol = area * lineWidth + seatVol + (d.openBottom || seat ? 0 : Math.PI * (profileR(d, 0) * d.maxDiameter / 2) ** 2 * 1.2);
   const grams = (vol / 1000) * 1.24;
   const meters = vol / (Math.PI * 0.875 ** 2) / 1000;
   const warnings: string[] = [];
@@ -267,7 +278,7 @@ export function estimate(d: Design, lineWidth = 0.5, layer = 0.24, speed = 40) {
   if (slope > 50) warnings.push(`Overhang reaches ${slope.toFixed(0)}°: above 45° the wall may sag.`);
   if (d.relief.kind !== 'smooth' && d.relief.depth > d.wall * 1.5) warnings.push(`Relief ${d.relief.depth.toFixed(1)} mm is deep for a ${d.wall} mm wall.`);
   if (minR < 8) warnings.push('The piece gets very narrow: the nozzle may not fit inside.');
-  return { maxDiameter: maxR * 2, seconds: pathLen / speed, grams, meters, warnings };
+  return { maxDiameter: maxR * 2, seconds: pathLen / speed + seatVol / (lineWidth * layer) / speed, grams, meters, warnings };
 }
 
 /** Worst outward overhang of the profile in degrees from vertical. */
@@ -293,6 +304,7 @@ export function surprise(family: Family): Design {
   d.twist = Math.random() < 0.5 ? 0 : Math.round(Math.random() * 18) * 10; d.twistShape = pick(['linear', 's', 'wave'] as const);
   const r = pick(RELIEFS); d.relief = { ...d.relief, kind: r.id, count: r.count, depth: r.depth };
   for (let k = 0; k < 6 && overhang(d) > 50; k++) d.height *= 1.15;
+  fitOpening(d);
   return d;
 }
 

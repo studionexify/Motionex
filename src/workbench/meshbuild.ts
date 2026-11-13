@@ -5,7 +5,9 @@
 import * as THREE from 'three';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { surfaceGrid, triangulate } from './surfacegrid';
-import type { Design } from './design';
+import { makeInner, type Design } from './design';
+import { isStandPart, seatOf } from './fitting';
+import { buildStand, standSoup } from './stand';
 
 export type MeshQuality = 'quick' | 'view' | 'export';
 const SPEC: Record<MeshQuality, { relief: number; plainRow: number; minCols: number; maxVerts: number; snap: boolean }> = {
@@ -33,15 +35,27 @@ export interface BuiltMesh {
   triangles: number;
 }
 
+/** The stand of a table shade as a mesh (print orientation: deck down). */
+function standMesh(d: Design): BuiltMesh | null {
+  const m = buildStand(d); if (!m) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(standSoup(m), 3));
+  const creased = toCreasedNormals(geo, (25 * Math.PI) / 180);
+  const position = creased.getAttribute('position').array as Float32Array;
+  return { position, normal: creased.getAttribute('normal').array as Float32Array, src: new Uint32Array(position.length / 3), outer: { rows: 1, cols: 1, pos: new Float32Array(12) }, inner: { rows: 1, cols: 1 }, triangles: position.length / 9 };
+}
+
 export function buildMesh(d: Design, q: MeshQuality): BuiltMesh {
+  if (isStandPart(d)) { const sm = standMesh(d); if (sm) return sm; }
   // both faces share the angular division (the rim joins them point for point)
   const o = gridSize(d, q, 'outer'), i2 = gridSize(d, q, 'inner'), cols = Math.max(o.cols, i2.cols);
   const go = surfaceGrid(d, o.rows, cols, 'outer', SPEC[q].snap), gi = surfaceGrid(d, i2.rows, cols, 'inner', SPEC[q].snap);
   const W = cols + 1, G = (o.rows + 1) * W, G2 = (i2.rows + 1) * W;
-  const floor = d.openBottom ? 0 : Math.min(d.height * 0.3, d.wall * 0.6 + 1.2);
-  const pos = new Float32Array((G + G2 + 2) * 3);
+  const seat = seatOf(d), open = d.openBottom || !!seat;
+  const floor = open ? 0 : Math.min(d.height * 0.3, d.wall * 0.6 + 1.2);
+  const pos = new Float32Array((G + G2 + 2 + (seat ? 4 * W : 0)) * 3);
   pos.set(go.pos, 0); pos.set(gi.pos, G * 3);
-  if (!d.openBottom) for (let k = G * 3; k < (G + G2) * 3; k += 3) pos[k + 2] = Math.max(pos[k + 2], floor);
+  if (!open) for (let k = G * 3; k < (G + G2) * 3; k += 3) pos[k + 2] = Math.max(pos[k + 2], floor);
   const cBot = G + G2, cFloor = cBot + 1;
   pos[cBot * 3 + 2] = 0; pos[cFloor * 3 + 2] = floor;
   const eps = Math.max(1e-4, Math.abs(d.relief.depth) * 0.002);
@@ -55,13 +69,32 @@ export function buildMesh(d: Design, q: MeshQuality): BuiltMesh {
   const topO = o.rows * W, topI = G + i2.rows * W;
   for (let j = 0; j < cols; j++) {
     idx.push(topO + j, topO + j + 1, topI + j + 1, topO + j, topI + j + 1, topI + j);     // rim
-    if (d.openBottom) idx.push(j, G + j + 1, j + 1, j, G + j, G + j + 1);
+    if (open) idx.push(j, G + j + 1, j + 1, j, G + j, G + j + 1);
     else idx.push(cBot, j + 1, j, cFloor, G + j, G + j + 1);
+  }
+  // lamp holder seat: a flat ring from the hole out into the wall (its rim is buried half a wall deep)
+  const S0 = cFloor + 1;
+  if (seat) {
+    const inner = makeInner(d), bury = d.wall / 2;
+    for (let j = 0; j < W; j++) {
+      const th = (j / cols) * Math.PI * 2, c = Math.cos(th), s = Math.sin(th);
+      const put = (k: number, r: number, z: number) => { pos[k * 3] = r * c; pos[k * 3 + 1] = r * s; pos[k * 3 + 2] = z; };
+      put(S0 + j, Math.max(seat.holeR, inner(seat.z0, th) + bury), seat.z0); put(S0 + W + j, Math.max(seat.holeR, inner(seat.z1, th) + bury), seat.z1);
+      put(S0 + 2 * W + j, seat.holeR, seat.z0); put(S0 + 3 * W + j, seat.holeR, seat.z1);
+    }
+    for (let j = 0; j < cols; j++) {
+      const o0 = S0 + j, o1 = S0 + W + j, h0 = S0 + 2 * W + j, h1 = S0 + 3 * W + j;
+      idx.push(o0, h0 + 1, o0 + 1, o0, h0, h0 + 1);       // underside
+      idx.push(o1, o1 + 1, h1 + 1, o1, h1 + 1, h1);       // top
+      idx.push(h0, h1 + 1, h0 + 1, h0, h1, h1 + 1);       // hole wall
+      idx.push(o0, o0 + 1, o1 + 1, o0, o1 + 1, o1);       // rim (inside the wall)
+    }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setIndex(idx);
-  const src = Uint32Array.from(idx);
+  // seat vertices take the base colour of the floor point
+  const src = Uint32Array.from(idx, (k) => (k >= S0 ? cFloor : k));
   const creased = toCreasedNormals(geo, (25 * Math.PI) / 180);
   return {
     position: creased.getAttribute('position').array as Float32Array, normal: creased.getAttribute('normal').array as Float32Array, src,

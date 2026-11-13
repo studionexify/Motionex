@@ -12,6 +12,9 @@ import { DEFAULT_SLICE, nozzleLimits, unpackSegs, wallLines, motionSamples, newZ
 import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
 import { compensate, physicsFor, simulate, type Physics, type PrintSim } from './physics';
+import { bulbsFor, defaultFitting, fitOpening, fittingOf, fittingWarnings, holeDia, isLamp, isStandPart, requiredFlip, SEATS, SEAT_HOLDERS, seatNeed, seatOf, minInner, type SeatKind, type StandKind } from './fitting';
+import { applyStand, partSize, STANDS } from './stand';
+import { holderById } from '../plugins/lumonex/catalog';
 
 // ───────── host (printer connections; only the desktop app provides one)
 export interface PrinterLink { id: string; name: string; state: string; progress?: number; detail?: string; bed?: [number, number, number]; machine?: string; kind?: string; address?: string }
@@ -112,6 +115,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     physics: { ...physicsFor(saved.slice?.printer ?? DEFAULT_SLICE.printer), ...saved.physics }, pathStyle: saved.pathStyle ?? 'ribbons', colorBy: saved.colorBy ?? 'feature', libOpen: saved.libOpen ?? {},
   };
   S.activeRule = S.rules[0]?.id ?? null;
+  // pieces saved before lamp fittings existed: give pendants and table shades their holder seat
+  const adoptFitting = (d: Design) => { if (isLamp(d) && !d.fitting) { d.fitting = defaultFitting(d.family); fitOpening(d); } };
+  adoptFitting(S.design);
+  { const rf = requiredFlip(S.design); if (rf !== null) S.slice.flip = rf; }
   // machine + nozzle must be known (and one of yours) before anything else
   if (S.printer && (!S.printer.nozzle || (S.printer.kind === 'profile' && !PRINTERS.some((p) => p.id === S.printer!.id && p.nozzles.includes(S.printer!.nozzle))))) S.printer = null;
   S.activeZone = S.zones[0]?.id ?? null;
@@ -264,6 +271,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     fullTimer = window.setTimeout(() => view.setDesign(S.design, S.color), 220);
   }
   function changed(designChanged: boolean) {
+    // a lamp holder seat must lie on the bed: the print orientation follows it
+    const rf = requiredFlip(S.design); if (rf !== null && S.slice.flip !== rf) { S.slice.flip = rf; view.flip = rf; }
     persist(); snapshot();
     if (designChanged) liveMesh();
     if (result) { stale = true; }
@@ -352,10 +361,11 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   themeB.onclick = () => { const dark = !(root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches)); S.theme = dark ? 'dark' : 'light'; root.dataset.theme = S.theme; persist(); view.setTheme(dark); };
   exportB.onclick = () => {
     exportB.disabled = true; const label = exportB.lastChild!.textContent; exportB.lastChild!.textContent = 'Preparing STL…';
-    void view.exportStl(JSON.parse(JSON.stringify(S.design))).then((stl) => saveOut(exportB, `${slug(S.design.name)}.stl`, new Uint8Array(stl)))
+    void view.exportStl(JSON.parse(JSON.stringify(S.design))).then((stl) => saveOut(exportB, `${fileBase()}.stl`, new Uint8Array(stl)))
       .catch((e) => flash(exportB, `STL failed: ${String((e as Error).message)}`))
       .finally(() => { exportB.disabled = false; if (exportB.lastChild) exportB.lastChild.textContent = label; });
   };
+  const fileBase = () => slug(S.design.name) + (isStandPart(S.design) ? '-stand' : '');
   nameIn.oninput = () => { S.design.name = nameIn.value || 'Untitled piece'; persist(); };
   const onKey = (e: KeyboardEvent) => {
     const tag = (e.target as HTMLElement).tagName; if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -491,7 +501,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   // Progressive disclosure: every section folds; only the essentials start open; your choice is remembered.
   const OPEN_KEY = 'motionex.open.v1';
   const openState: Record<string, boolean> = (() => { try { return JSON.parse(localStorage.getItem(OPEN_KEY) ?? '{}'); } catch { return {}; } })();
-  const OPEN_DEFAULT = new Set(['Piece profile', 'Relief / surface', 'Edit', 'Rules', 'Selected rule', 'Change there', 'Motion zones (layer by layer)', 'Zone', 'Output', 'Printer', 'Render']);
+  const OPEN_DEFAULT = new Set(['Piece profile', 'Lamp fitting', 'Relief / surface', 'Edit', 'Rules', 'Selected rule', 'Change there', 'Motion zones (layer by layer)', 'Zone', 'Output', 'Printer', 'Render']);
   const group = (title: string, ...kids: (HTMLElement | null)[]) => {
     const key = title.split(' · ')[0];
     const d = h('details', { class: 'mxs-group' }) as HTMLDetailsElement;
@@ -513,6 +523,44 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const importOpts = { soften: 1, lineWidth: 0.012, fillClosed: false };
   const dChange = () => changed(true);
 
+  /** Lamp fitting: how the lamp holder mounts, the bulb that must fit, and the stand of a table shade. */
+  function fittingGroup() {
+    const d = D(), f = fittingOf(d), F = () => (d.fitting ??= defaultFitting(d.family));
+    const redo = () => { dChange(); renderAll(); };
+    const showPart = (part: 'piece' | 'stand') => { d.part = part; changed(true); view.setDesign(S.design, S.color, true); view.fit(); renderAll(); };
+    const pendant = d.family === 'pendant', onStand = d.family === 'shade' && f.stand !== 'none', holder = holderById(f.holder);
+    const kids: (HTMLElement | null)[] = [];
+    if (onStand) kids.push(row('Show', seg<'piece' | 'stand'>([['piece', 'Shade'], ['stand', 'Stand']], () => (isStandPart(d) ? 'stand' : 'piece'), showPart), isStandPart(d) ? 'Shown as it prints: deck down, feet up. Slice and export now make the stand.' : 'The shade and its stand are two prints.'));
+    kids.push(row(pendant ? 'Hangs by' : 'Holder mount', select<SeatKind>(SEATS.map((x) => [x.id, x.name]), () => f.seat, (v) => { F().seat = v; F().hole = 0; fitOpening(d); }, redo), SEATS.find((x) => x.id === f.seat)?.hint));
+    if (f.seat !== 'none') {
+      kids.push(
+        row('Lamp holder', select(SEAT_HOLDERS.map((x) => [x.id, x.name] as [string, string]), () => f.holder, (v) => { const ff = F(); ff.holder = v; ff.hole = 0; if (!holderById(v).bulbs.includes(ff.bulb)) ff.bulb = holderById(v).bulbs[0]; fitOpening(d); }, redo)),
+        row('Bulb', select(bulbsFor(f.holder).map((b) => [b.id, b.name] as [string, string]), () => f.bulb, (v) => { F().bulb = v; }, redo)),
+        row('Show bulb', toggle(() => f.showBulb, (v) => { F().showBulb = v; }, redo)),
+        row('Hole Ø', num(() => +holeDia(f).toFixed(1), (v) => { F().hole = v; }, 5, 60, 0.1, 'mm', dChange), f.hole > 0 ? 'Your own size. Set the mount again to return to the holder’s size.' : f.seat === 'ring' ? `${holder.name}: Ø${holder.ringHole} mm + ${f.clearance} mm fit. Measure your holder’s thread and adjust if it differs.` : undefined),
+        row('Fit clearance', num(() => f.clearance, (v) => { F().clearance = v; }, 0, 1, 0.05, 'mm', dChange)),
+        row('Seat thickness', num(() => f.thickness, (v) => { F().thickness = v; }, 1.2, 6, 0.2, 'mm', dChange), f.seat === 'ring' ? 'What the shade ring clamps: 2–4 mm.' : undefined));
+    }
+    if (d.family === 'shade') {
+      const list = h('div', { class: 'mxs-chips mxs-chips-3' });
+      for (const t of STANDS) { const b = h('button', { class: `mxs-chip${f.stand === t.id ? ' on' : ''}`, title: t.blurb }, h('span', {}, t.name)); b.onclick = () => { applyStand(F(), t.id as StandKind); fitOpening(d); showPart(t.id === 'none' ? 'piece' : 'stand'); }; list.append(b); }
+      kids.push(h('p', { class: 'mxs-hint' }, 'Stand · what the shade sits on'), list);
+      if (onStand) {
+        const ped = !!STANDS.find((t) => t.id === f.stand)?.pedestal;
+        kids.push(
+          row('Clear height', num(() => f.standHeight, (v) => { F().standHeight = v; }, 30, 250, 1, 'mm', dChange), 'Room under the deck for the holder and cable.'),
+          row(ped ? 'Feet' : 'Legs', num(() => f.legs, (v) => { F().legs = v; }, 3, 8, 1, '', dChange)),
+          f.stand !== 'drum' && f.stand !== 'hourglass' ? row('Lean', num(() => f.splay, (v) => { F().splay = v; }, 0, 30, 1, '°', dChange)) : null,
+          row(ped ? 'Wall' : 'Leg thickness', num(() => f.legSize, (v) => { F().legSize = v; }, 6, 30, 0.5, 'mm', dChange)));
+      }
+    }
+    const warns = fittingWarnings(d), seat = seatOf(d);
+    for (const w of warns) kids.push(h('div', { class: 'mxs-est-w' }, w));
+    if (seat && Math.min(minInner(d, (seat.z0 + seat.z1) / 2), minInner(d, seat.top ? seat.z0 : seat.z1)) < seatNeed(d) - 0.05) kids.push(h('div', { class: 'mxs-btnrow' }, btn('Widen the opening to fit', () => { fitOpening(d); redo(); })));
+    if (seat) kids.push(h('p', { class: 'mxs-hint' }, seat.top ? 'The seat is the flat ring at the top. It prints first, upside down on the bed.' : 'The seat is the flat ring at the bottom, printed first on the bed.'));
+    return group('Lamp fitting', ...kids);
+  }
+
   function designPanel() {
     right.append(seg([['shape', 'Shape'], ['relief', 'Relief'], ['look', 'Appearance']], () => S.designTab, (v) => { S.designTab = v; renderPanel(); }));
     if (S.designTab === 'shape') {
@@ -530,7 +578,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       for (const o of OUTLINES.filter((x) => x.families.includes(D().family))) {
         const c = h('canvas', { width: '72', height: '56' }) as HTMLCanvasElement; drawOutline(c, o.pts);
         const b = h('button', { class: `mxs-gi${D().outline === o.id ? ' on' : ''}` }, c, h('span', {}, o.name));
-        b.onclick = () => { D().outline = o.id; D().profile = structuredClone(o.pts); if (o.h) D().height = o.h; if (o.d) D().maxDiameter = o.d; if (o.section) D().section = o.section; dChange(); renderPanel(); };
+        b.onclick = () => { D().outline = o.id; D().profile = structuredClone(o.pts); if (o.h) D().height = o.h; if (o.d) D().maxDiameter = o.d; if (o.section) D().section = o.section; fitOpening(D()); dChange(); renderPanel(); };
         gal.append(b);
       }
       right.append(group('Outline · seen from the side', gal));
@@ -547,6 +595,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         row('Twist shape', select([['linear', 'Even'], ['s', 'S-curve'], ['wave', 'Back and forth']], () => D().twistShape, (v) => (D().twistShape = v), dChange)),
         row('Wall thickness', num(() => D().wall, (v) => (D().wall = v), S.slice.lineWidth, 8, 0.05, 'mm', dChange), `${wallLines(D(), S.slice)} line${wallLines(D(), S.slice) > 1 ? 's' : ''} per layer`),
         row('Open bottom', toggle(() => D().openBottom, (v) => (D().openBottom = v), dChange))));
+      if (isLamp(D())) right.append(fittingGroup());
     } else if (S.designTab === 'relief') {
       const rl = D().relief;
       const search = h('input', { type: 'search', class: 'mxs-search', placeholder: `Search ${ALL_RELIEFS.length} reliefs…`, value: reliefQuery, 'aria-label': 'Search reliefs' }) as HTMLInputElement;
@@ -947,7 +996,11 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     sliceB.onclick = doSlice;
     right.append(group('Printer', h('p', { class: 'mxs-picked' }, `${pname} · ${S.printer?.nozzle ?? 0.4} mm nozzle · bed ${bed[0]} × ${bed[1]} × ${bed[2]} mm`),
       row('Spiral vase', toggle(() => s.spiral, (v) => (s.spiral = v), sc), 'One continuous wall, no seam.'),
-      row('Print upside down', toggle(() => s.flip, (v) => (s.flip = v), sc), S.design.family === 'pendant' ? 'Pendants print best flipped.' : undefined)));
+      (() => {
+        const rf = requiredFlip(S.design), t = toggle(() => s.flip, (v) => (s.flip = v), sc);
+        if (rf !== null) t.disabled = true;
+        return row('Print upside down', t, rf === null ? (S.design.family === 'pendant' ? 'Pendants print best flipped.' : undefined) : isStandPart(S.design) ? 'The stand prints deck down, feet up.' : rf ? 'Fixed: the lamp holder seat prints first, on the bed.' : 'Fixed: the lamp holder seat is at the bottom, on the bed.');
+      })()));
     right.append(group('Thickness & layer',
       row('Layer height', num(() => s.layerHeight, (v) => (s.layerHeight = v), NZ().layerMin, NZ().layerMax, 0.01, 'mm', sc), `${NZ().layerMin}–${NZ().layerMax} mm for a ${NZ().d} mm nozzle`),
       row('First layer', num(() => s.firstLayerHeight, (v) => (s.firstLayerHeight = v), NZ().layerMin, NZ().layerMax, 0.01, 'mm', sc)),
@@ -991,7 +1044,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       if (result.warnings.length) outG.append(h('div', { class: 'mxs-warn' }, ...result.warnings.map((w) => h('div', {}, w))));
       if (stale) outG.append(h('p', { class: 'mxs-hint mxs-amber' }, 'You changed the piece since this slice. Slice again before printing.'));
       const dl = h('button', { class: 'mxs-btn mxs-wide' }, icon('export'), canDownload || opts.save ? 'Download G-code' : 'Copy G-code');
-      dl.onclick = () => { if (!result) return; if (canDownload || opts.save) void saveOut(dl, `${slug(S.design.name)}.gcode`, new TextEncoder().encode(result.gcode)); else copy(dl, result.gcode); };
+      dl.onclick = () => { if (!result) return; if (canDownload || opts.save) void saveOut(dl, `${fileBase()}.gcode`, new TextEncoder().encode(result.gcode)); else copy(dl, result.gcode); };
       outG.append(dl, exportB);
       // send to printer
       if (S.printer?.kind === 'device' && host) {
@@ -999,7 +1052,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         const prog = h('div', { class: 'mxs-prog' });
         const send = (start: boolean) => async () => {
           if (!result) return;
-          try { prog.textContent = 'Uploading…'; await host.send(S.printer!.id, `${slug(S.design.name)}.gcode`, result.gcode, start, (f) => (prog.textContent = `Uploading ${Math.round(f * 100)}%`)); prog.textContent = start ? 'Print started.' : 'Uploaded.'; }
+          try { prog.textContent = 'Uploading…'; await host.send(S.printer!.id, `${fileBase()}.gcode`, result.gcode, start, (f) => (prog.textContent = `Uploading ${Math.round(f * 100)}%`)); prog.textContent = start ? 'Print started.' : 'Uploaded.'; }
           catch (e) { prog.textContent = `Could not send: ${String((e as Error)?.message ?? e)}`; }
         };
         const sp = h('button', { class: 'mxs-btn mxs-accent mxs-wide', disabled: stale || !p || p.state === 'printing' }, icon('send'), 'Send & print'); sp.onclick = send(true);
@@ -1059,7 +1112,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       for (const f of FAMILIES) { const b = h('button', { class: 'mxs-card mxs-new' }, icon(f.id, 26), h('b', {}, `New ${f.name.toLowerCase()}`)); b.onclick = () => { S.design = defaultDesign(f.id); S.zones = []; S.rules = []; S.rail = 'studio'; S.step = 'design'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); }; grid.append(b); }
       for (const p of lib) {
         const c = h('canvas', { width: '120', height: '90' }) as HTMLCanvasElement; drawOutline(c, p.design.profile);
-        const open = h('button', { class: 'mxs-btn mxs-sm' }, 'Open'); open.onclick = () => { S.design = structuredClone(p.design); S.zones = structuredClone(p.zones); S.rules = structuredClone(p.rules ?? []); S.activeRule = S.rules[0]?.id ?? null; S.activeZone = S.zones[0]?.id ?? null; S.rail = 'studio'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); };
+        const open = h('button', { class: 'mxs-btn mxs-sm' }, 'Open'); open.onclick = () => { S.design = structuredClone(p.design); adoptFitting(S.design); S.zones = structuredClone(p.zones); S.rules = structuredClone(p.rules ?? []); S.activeRule = S.rules[0]?.id ?? null; S.activeZone = S.zones[0]?.id ?? null; S.rail = 'studio'; result = null; view.setToolpath(null, [0, 0]); changed(true); renderAll(); };
         const del = h('button', { class: 'mxs-btn mxs-sm' }, 'Delete'); del.onclick = async () => { await libSet((await libGet()).filter((x) => x.id !== p.id)); renderPage(); };
         grid.append(h('div', { class: 'mxs-card' }, c, h('b', {}, p.name), h('small', {}, `${p.design.family} · ${new Date(p.at).toLocaleDateString()}`), h('div', { class: 'mxs-btnrow' }, open, del)));
       }
@@ -1133,7 +1186,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     estCard.innerHTML = '';
     estCard.classList.toggle('open', estOpen);
     const ok = !e.warnings.length;
-    const H = S.design.height, bed = bedOfPrinter();
+    const H = partSize(S.design).height, bed = bedOfPrinter();
+    if (!isStandPart(S.design)) e.warnings.push(...fittingWarnings(S.design));
     const fits = e.maxDiameter <= Math.min(bed[0], bed[1]) - 4 && H <= bed[2];
     const sliced = result && !stale;
     const pill = h('button', { class: 'mxs-est-pill', title: 'Show estimate details' }, h('i', { class: ok && fits ? 'ok' : 'warn' }), icon('clock', 13), fmtTime(sliced ? result!.stats.seconds : e.seconds), icon('weight', 13), `${(sliced ? result!.stats.grams : e.grams).toFixed(0)} g`);
@@ -1206,7 +1260,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     body.classList.toggle('mxs-paged', !onStudio);
     if (onStudio) syncPath();
     renderTools(); paintRules();
-    if (onStudio) { renderPanel(); renderEstimate(); renderViewBar(); (stage.querySelector('.mxs-crumb') as HTMLElement).textContent = `Motionex · ${S.step === 'design' ? 'Design' : S.step === 'motion' ? 'Motion' : 'Slice'} · ${FAMILIES.find((f) => f.id === S.design.family)?.name}`; }
+    if (onStudio) { renderPanel(); renderEstimate(); renderViewBar(); (stage.querySelector('.mxs-crumb') as HTMLElement).textContent = `Motionex · ${S.step === 'design' ? 'Design' : S.step === 'motion' ? 'Motion' : 'Slice'} · ${FAMILIES.find((f) => f.id === S.design.family)?.name}${isStandPart(S.design) ? ' · Stand' : ''}`; }
     else renderPage();
   }
 
