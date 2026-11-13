@@ -63,7 +63,10 @@ function plateaus(vals: Float32Array): { sharp: boolean; base: number; cuts: { i
   const B = 64, hist = new Float64Array(B);
   let mid = 0;
   for (const x of vals) { const c = Math.min(1, Math.max(0, x)); hist[Math.min(B - 1, Math.floor(c * B))]++; if (c > 0.12 && c < 0.88) mid++; }
-  const sharp = mid / vals.length < 0.14;
+  // transitional samples: those outside every well-populated level (a plateau can sit at any height)
+  let trans = 0; for (let i = 0; i < B; i++) if (hist[i] / vals.length < 0.01) trans += hist[i];
+  void mid;
+  const sharp = trans / vals.length < 0.12;
   if (!sharp) return { sharp, base: 0, cuts: [] };
   const peaks: { c: number; m: number }[] = [];
   for (let i = 0; i < B; i++) {
@@ -116,13 +119,13 @@ function build(vals: Float32Array, W: number, H: number, pxPerCell: number, pu: 
   if (!pl.sharp && !force) {
     // look for jumps: neighbouring samples (1/RES of a cell apart) that differ by more than a smooth slope can
     const mids: number[] = []; let pairs = 0;
-    for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) {
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const a = vals[y * W + x], b = vals[y * W + (x + 1) % W], c = vals[((y + 1) % H) * W + x];
       pairs += 2;
       if (Math.abs(a - b) > 0.15) mids.push((a + b) / 2);
       if (Math.abs(a - c) > 0.15) mids.push((a + c) / 2);
     }
-    if (mids.length < pairs * 0.002) return { sharp: false, W, H, pu, pv, base: 0, levels: [] };
+    if (mids.length < pairs * 0.0004) return { sharp: false, W, H, pu, pv, base: 0, levels: [] };
     mids.sort((p, q) => p - q);
     const iso = mids[Math.floor(mids.length / 2)];
     const inside = new Uint8Array(W * H); for (let i = 0; i < inside.length; i++) inside[i] = vals[i] > iso ? 1 : 0;
