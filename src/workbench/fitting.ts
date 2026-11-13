@@ -37,10 +37,12 @@ export interface Fitting {
   /** Stand build: 'light' = hollow legs and a slim deck (fast, little filament); 'heavy' = thicker legs with
    *  foot pads and a solid deck (weight low down, hard to tip); 'standard' in between. */
   build?: StandBuild;
+  /** Heavy build: a sealed pocket in the deck, filled with steel shot or sand during a print pause. */
+  ballast?: boolean;
 }
 export type StandBuild = 'light' | 'standard' | 'heavy';
 export const BUILDS: { id: StandBuild; name: string; hint: string }[] = [
-  { id: 'light', name: 'Light', hint: 'Hollow legs (2.4 mm walls), slimmer legs and three thin spokes: fastest print, least filament. For light shades.' },
+  { id: 'light', name: 'Light', hint: 'Hollow legs (2.4 mm walls), slimmer legs, three thin spokes; pedestals get pointed windows. Fastest print, least filament. For light shades.' },
   { id: 'standard', name: 'Standard', hint: 'Solid legs, four spokes.' },
   { id: 'heavy', name: 'Heavy', hint: 'Legs 35 % thicker with 45° foot pads and a solid deck: more weight low down, hard to tip. For wide or heavy shades.' },
 ];

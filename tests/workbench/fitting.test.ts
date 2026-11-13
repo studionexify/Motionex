@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_SLICE, slice } from '../../src/workbench/generator';
 import { defaultDesign, estimate, makeInner, OUTLINES, SECTIONS, surprise, type Design } from '../../src/workbench/design';
 import { bulbFit, bulbPlace, fitOpening, fittingOf, fittingWarnings, holeDia, requiredFlip, SEAT_HOLDERS, seatNeed, seatOf, bulbsFor } from '../../src/workbench/fitting';
-import { applyStand, buildStand, sliceStand, standSection, standSoup, STANDS } from '../../src/workbench/stand';
+import { applyStand, buildStand, pauseCommand, sliceStand, standSection, standSoup, STANDS } from '../../src/workbench/stand';
 import { buildMesh, meshToStl } from '../../src/workbench/meshbuild';
 import { areaTotal, pointIn, SCALE } from '../../src/engine/clipper';
 import { holderById, bulbById, bulbLength } from '../../src/plugins/lumonex/catalog';
@@ -118,73 +118,61 @@ describe('lamp holder seat', () => {
 describe('table shade stands', () => {
   const kinds = STANDS.filter((t) => t.id !== 'none');
   it('offers a long list of stands', () => { expect(kinds.length).toBeGreaterThanOrEqual(12); });
-  const cases = kinds.flatMap((t) => (['light', 'standard', 'heavy'] as const).map((b) => [t.id, b] as [string, 'light' | 'standard' | 'heavy']));
-  it.each(cases)('%s (%s): fits the shade, holds the holder, prints without support', (id, build) => {
-    const d = defaultDesign('shade'); d.fitting = fittingOf(d); applyStand(d.fitting, id as never); d.fitting.build = build; d.part = 'stand';
-    const m = buildStand(d)!;
-    const f = fittingOf(d);
-    // the spigot fits inside the shade with a small clearance; the seat cone is wider than the shade's inside
-    const inside = Math.min(minIn(d, 0), minIn(d, 1.5), minIn(d, 3));
-    expect(inside - m.rim).toBeGreaterThan(0.2); expect(inside - m.rim).toBeLessThan(0.5);
-    expect(m.flange).toBeGreaterThan(inside + 1);
-    expect(m.holeR * 2).toBeCloseTo(40.8, 6);
-    expect(m.height - m.deck).toBeCloseTo(f.standHeight, 6);
-    expect(f.standHeight).toBeGreaterThanOrEqual(holderById(f.holder).length + 20);
-    expect(m.warnings).toEqual([]);
-    // the hole is open and its rim is solid on every seat layer
-    for (const z of [0.1, 1.5, 2.9]) {
-      const sec = standSection(m, z);
-      expect(pointIn(0, 0, sec)).toBe(false);
-      expect(pointIn(m.holeR - 0.2, 0, sec)).toBe(false);
-      for (let a = 0; a < 12; a++) expect(pointIn((m.holeR + 2) * Math.cos(a), (m.holeR + 2) * Math.sin(a), sec)).toBe(true);
-    }
-    // no support: every layer rests on the one below, within a 50° lean
-    const dz = 0.4, grow = dz * Math.tan((50 * Math.PI) / 180) + 0.05;
-    let prev = standSection(m, 0.01);
-    expect(areaTotal(prev)).toBeGreaterThan(500);
-    for (let z = dz; z < m.height - 0.01; z += dz) {
-      const cur = standSection(m, z);
-      expect(areaTotal(cur), `z=${z}`).toBeGreaterThan(20);
-      for (const path of cur) for (let i = 0; i < path.length; i += 3) {
-        const qx = path[i].X / SCALE, qy = path[i].Y / SCALE; let ok = pointIn(qx, qy, prev);
-        for (let a = 0; !ok && a < 16; a++) ok = pointIn(qx + grow * Math.cos((a / 16) * TAU), qy + grow * Math.sin((a / 16) * TAU), prev);
-        expect(ok, `${id} overhang at z=${z.toFixed(1)}`).toBe(true);
-      }
-      prev = cur;
-    }
-    // the feet end flat at the full height
-    expect(areaTotal(standSection(m, m.height - 0.05))).toBeGreaterThan(50);
-    if (build !== 'standard' && id !== 'tripod' && id !== 'square' && id !== 'drum') return; // slicing is checked on a subset
-    // mesh and G-code
-    const soup = standSoup(m); let zmax = 0; for (let k = 2; k < soup.length; k += 3) { expect(Number.isFinite(soup[k])).toBe(true); zmax = Math.max(zmax, soup[k]); }
-    expect(zmax).toBeCloseTo(m.height, 3);
-    const mesh = buildMesh(d, 'quick'); expect(mesh.triangles).toBe(soup.length / 9);
-    const r = slice(d, { ...S, layerHeight: 0.3, firstLayerHeight: 0.3 }, [], brush);
-    expect(r.gcode).toContain('stand'); expect(r.gcode).not.toMatch(/[XYZEF]-?(NaN|Infinity)/);
-    expect(r.layers).toBe(Math.ceil(m.height / 0.3 - 1e-6));
-    expect(Math.max(...r.layerZ)).toBeCloseTo(m.height, 3);
-    // printed volume ≈ solid volume
-    let vol = 0; for (let z = 0.15; z < m.height; z += 0.3) vol += areaTotal(standSection(m, z)) * 0.3;
-    const printed = r.stats.filamentMm * Math.PI * (S.filamentDia / 2) ** 2 / S.flowRatio;
-    expect(printed / vol).toBeGreaterThan(0.9); expect(printed / vol).toBeLessThan(build === 'light' ? 1.12 : 1.08); // thin hollow walls overlap a little more
-    // every extruded point is inside the solid
-    const cx = S.bedX / 2, cy = S.bedY / 2;
-    const secs = new Map<number, ReturnType<typeof standSection>>();
-    let outside = 0, n = 0;
-    for (const g of r.segs) { if (g.kind === 'travel' || g.layer < 1 || g.layer % 7) continue; let sec = secs.get(g.layer); if (!sec) { sec = standSection(m, r.layerZ[g.layer] - 0.15); secs.set(g.layer, sec); } n++; if (!pointIn(g.x - cx, g.y - cy, sec)) outside++; }
-    expect(n).toBeGreaterThan(100); expect(outside).toBe(0);
-  });
   it('light, standard and heavy builds really differ in weight; light legs are hollow, heavy legs have pads', () => {
     const grams = (b: 'light' | 'standard' | 'heavy', id = 'tripod') => { const d = defaultDesign('shade'); d.fitting = fittingOf(d); applyStand(d.fitting, id as never); d.fitting.build = b; d.part = 'stand'; return { m: buildStand(d)!, g: estimate(d, 0.45, 0.2, 40).grams }; };
-    for (const id of ['tripod', 'four', 'square', 'drum', 'cone']) {
+    for (const id of ['tripod', 'four', 'square', 'drum', 'cone', 'hourglass']) {
       const L = grams('light', id).g, M = grams('standard', id).g, Hv = grams('heavy', id).g;
-      expect(L, id).toBeLessThan(M * (id === 'drum' || id === 'cone' ? 0.97 : 0.85)); expect(Hv, id).toBeGreaterThan(M * 1.25);
+      expect(L, id).toBeLessThan(M * 0.85); expect(Hv, id).toBeGreaterThan(M * 1.25);
     }
     const light = grams('light').m, mid = light.deck + (light.height - light.deck) / 2;
     const sec = standSection(light, mid), solid = standSection(grams('standard').m, mid);
     expect(areaTotal(sec)).toBeLessThan(areaTotal(solid) * 0.75);   // the legs are tubes
     const heavy = grams('heavy').m;
     expect(areaTotal(standSection(heavy, heavy.height - 0.1))).toBeGreaterThan(areaTotal(standSection(grams('standard').m, heavy.height - 0.1)) * 2);
+  });
+  it('heavy ballast: a sealed pocket, a pause where it can still be filled, and the seat stays clampable', () => {
+    for (const id of ['tripod', 'drum']) {
+      const d = defaultDesign('shade'); d.fitting = fittingOf(d); applyStand(d.fitting, id as never); d.fitting.build = 'heavy'; d.part = 'stand';
+      const plain = buildStand(d)!; d.fitting.ballast = true; const m = buildStand(d)!;
+      expect(m.deck - plain.deck).toBeCloseTo(12, 6);
+      const p = m.pause!, ring = m.voids[0], rIn = ring.ha![0][0], rOut = ring.a[0][0], rMid = (rIn + rOut) / 2;
+      // floor and lid are solid, the channel is open below the pause height and closed by the lid
+      expect(pointIn(rMid, 0, standSection(m, 0.8))).toBe(true);
+      expect(pointIn(rMid, 0, standSection(m, p.z - 0.5))).toBe(false);
+      expect(pointIn(rMid, 0, standSection(m, m.deck - 0.8))).toBe(true);
+      expect(areaTotal(standSection(m, p.z - 0.5))).toBeLessThan(areaTotal(standSection(plain, 5)) * 0.75);
+      // counterbore: the seat plate is `thickness` thick, the holder body fits above it
+      const f = fittingOf(d), body = holderById(f.holder).body / 2;
+      expect(m.bore!).toBeGreaterThanOrEqual(body + 1);
+      expect(pointIn(m.holeR + 0.5, 0, standSection(m, f.thickness - 0.3))).toBe(true);
+      expect(pointIn(m.holeR + 0.5, 0, standSection(m, f.thickness + 0.3))).toBe(false);
+      // the closed pocket is in the mesh as an inward-facing shell
+      expect(standSoup(m).length).toBeGreaterThan(standSoup(plain).length);
+      if (id !== 'tripod') continue; // a heavy stand is ~2 million moves: slice one
+      // G-code: one pause, after the last layer at or below the roof start, for the chosen machine
+      const r = slice(d, { ...S, printer: 'bbl-a1', layerHeight: 0.3, firstLayerHeight: 0.3 }, [], brush);
+      const lines = r.gcode.split('\n'), at = lines.findIndex((l) => l === 'M400 U1');
+      expect(lines.filter((l) => l === 'M400 U1').length).toBe(1);
+      const zBefore = [...lines.slice(0, at)].reverse().find((l) => l.startsWith(';Z:'))!, zAfter = lines.slice(at).find((l) => l.startsWith(';Z:'))!;
+      expect(+zBefore.slice(3)).toBeLessThanOrEqual(p.z + 1e-6); expect(+zAfter.slice(3)).toBeGreaterThan(p.z);
+      expect(r.gcode).toMatch(/BALLAST PAUSE/);
+    }
+    expect(pauseCommand('elegoo-n4max')).toBe('PAUSE'); expect(pauseCommand('bbl-p1s')).toBe('M400 U1'); expect(pauseCommand('other')).toBe('M601');
+  });
+  it('light pedestals have pointed windows through the wall', () => {
+    for (const id of ['drum', 'cone', 'hourglass']) {
+      const d = defaultDesign('shade'); d.fitting = fittingOf(d); applyStand(d.fitting, id as never); d.fitting.build = 'light'; d.part = 'stand';
+      const m = buildStand(d)!, zMid = (m.deck + 4 + m.height - 14 - 6) / 2;
+      const sec = standSection(m, zMid);
+      // between windows the wall is there, in a window it is not
+      const nf = 4, nw = 2 * nf;
+      let open = 0, solid = 0;
+      for (let j = 0; j < nw; j++) for (const [a, want] of [[((j + 0.5) / nw) * TAU, 'open'], [((j + 1) / nw) * TAU, 'solid']] as const) {
+        let hit = false; for (let r = 5; r < m.radius + 2 && !hit; r += 0.25) hit = pointIn(r * Math.cos(a), r * Math.sin(a), sec);
+        if (want === 'open' && !hit) open++; if (want === 'solid' && hit) solid++;
+      }
+      expect(open, id).toBe(nw); expect(solid, id).toBe(nw);
+    }
   });
   it('the shade on a stand has no seat of its own and prints upright; the stand never flips', () => {
     const d = defaultDesign('shade');

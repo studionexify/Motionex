@@ -3,7 +3,7 @@
 // print orientation: deck on the bed, feet up, so nothing needs support. Every solid is a loft between
 // two flat outlines, which gives the 3D mesh and the exact outline of every printed layer from the same
 // description; the layers are unioned with Clipper and filled solid with concentric lines.
-import { areaTotal, cleanPaths, offset, toExPolygons, toInt, union, SCALE } from '../engine/clipper';
+import { areaTotal, cleanPaths, difference, offset, toExPolygons, toInt, union, SCALE } from '../engine/clipper';
 import type { Path, Paths } from '../engine/types';
 import { holderById } from '../plugins/lumonex/catalog';
 import type { Design } from './design';
@@ -41,8 +41,28 @@ export const STANDS: StandType[] = [
 export const standType = (id: StandKind) => STANDS.find((s) => s.id === id) ?? STANDS[0];
 
 /** A solid between outline `a` at z0 and outline `b` at z1 (same point count, counter-clockwise), optionally with a hole. */
-interface Prim { z0: number; z1: number; a: Pt[]; b: Pt[]; ha?: Pt[]; hb?: Pt[] }
-export interface StandModel { prims: Prim[]; height: number; radius: number; deck: number; rim: number; flange: number; holeR: number; warnings: string[] }
+interface Prim { z0: number; z1: number; a: Pt[]; b: Pt[]; ha?: Pt[]; hb?: Pt[]; /** outline = one arc out + one arc back (annular sector): caps are triangle strips */ strip?: boolean }
+export interface StandModel {
+  prims: Prim[]; height: number; radius: number; deck: number; rim: number; flange: number; holeR: number; warnings: string[];
+  /** Closed hollows subtracted from the solid (the ballast pocket). */
+  voids: Prim[];
+  /** Ballast pocket: the print pauses after the last layer at or below z so it can be filled; cm3 = fillable volume. */
+  pause?: { z: number; cm3: number };
+  /** Counterbore above the seat plate (solid decks), radius in mm. */
+  bore?: number;
+}
+/** Bulk densities (g/cm³) for the fill guide. */
+export const BALLAST_FILL = { steel: 4.6, sand: 1.6 };
+/** Pause command per machine (what each one's own slicer uses for a pause at a layer). */
+const PAUSE_CMD: Record<string, string> = { 'bbl-a1': 'M400 U1', 'bbl-p1s': 'M400 U1', 'elegoo-n4max': 'PAUSE', 'snapmaker-u1': 'PAUSE' };
+export const pauseCommand = (printer: string) => PAUSE_CMD[printer] ?? 'M601';
+/** Annular sector from angle a0 to a1 between radii ri and ro (counter-clockwise; n points per arc). */
+const sector = (a0: number, a1: number, ri: number, ro: number, n = 12): Pt[] => {
+  const p: Pt[] = [];
+  for (let i = 0; i < n; i++) { const a = a0 + ((a1 - a0) * i) / (n - 1); p.push([ro * Math.cos(a), ro * Math.sin(a)]); }
+  for (let i = n - 1; i >= 0; i--) { const a = a0 + ((a1 - a0) * i) / (n - 1); p.push([ri * Math.cos(a), ri * Math.sin(a)]); }
+  return p;
+};
 
 const circle = (r: number, n: number, cx = 0, cy = 0): Pt[] => Array.from({ length: n }, (_, i) => [cx + r * Math.cos((i / n) * TAU), cy + r * Math.sin((i / n) * TAU)] as Pt);
 const segsFor = (r: number) => Math.round(clamp((TAU * r) / 1.5, 48, 200));
@@ -63,13 +83,16 @@ export function buildStand(d: Design): StandModel | null {
   const hs = STAND_SPIGOT;
   // the spigot goes inside the shade; the 45° cone above it centres the shade's bottom edge
   const Rs = Math.max(12, Math.min(minInner(d, 0), minInner(d, hs / 2), minInner(d, hs)) - 0.3);
-  const step = clamp(d.wall + 1.5, 2.5, 6), Rf = Rs + step, zc1 = hs + step, deck = zc1 + 2;
-  const clear = clamp(f.standHeight, 20, 400), H = deck + clear, L = H - zc1;
+  const step = clamp(d.wall + 1.5, 2.5, 6), Rf = Rs + step, zc1 = hs + step, deck0 = zc1 + 2;
   const build = f.build ?? 'standard', light = build === 'light', heavy = build === 'heavy';
+  // heavy + ballast: the deck grows 12 mm deeper to hold a sealed pocket for steel shot or sand
+  const ballast = heavy && !!f.ballast, bd = ballast ? 12 : 0;
+  const clear = clamp(f.standHeight, 20, 400), H = deck0 + bd + clear, L = H - zc1;
   const size = clamp(f.legSize * (light ? 0.85 : heavy ? 1.35 : 1), 5, 54), N = Math.round(clamp(f.legs || type.legs, 3, 12)), splay = clamp(f.splay, 0, 35);
   const prims: Prim[] = [];
 
   const seat = f.seat !== 'none', holeR = seat ? holeDia(f) / 2 : 0, hubR = holeR + seatLand(f) + 2;
+  const deck = deck0 + bd;
   const T = Math.min(deck, clamp(f.thickness, 1.2, 8));
   const leg = type.leg, wall = light ? 1.8 : Math.max(2.4, size * (heavy ? 0.36 : 0.22));
   const halfTop = leg ? (size * leg.d0) / 2 : wall / 2;
@@ -80,7 +103,17 @@ export function buildStand(d: Design): StandModel | null {
   const solid = heavy || rimIn < hubR + 4;
   if (solid) rimIn = seat ? holeR : Math.max(0, rimIn);
   if (seat && Rs < holeR + seatLand(f)) warnings.push(`The shade is only Ø${(Rs * 2).toFixed(0)} mm inside at the bottom: too small for the Ø${(holeR * 2).toFixed(1)} mm holder hole and its ring.`);
-  prims.push(tube(0, hs, Rs, Rs, rimIn, rimIn), tube(hs, zc1, Rs, Rf, rimIn, rimIn), tube(zc1, deck, Rf, Rf, rimIn, rimIn));
+  // a solid deck keeps the seat only `T` thick: above it a counterbore takes the holder body, so the
+  // shade ring's thread still reaches through and clamps
+  const holderDef = holderById(f.holder);
+  const bore = solid && seat ? (f.seat === 'ring' ? Math.max(holeR, holderDef.body / 2 + 1) : 12) : 0;
+  const deckTube = (z0: number, z1: number, ro0: number, ro1: number) => {
+    if (!bore || T <= z0 + 1e-9) return [tube(z0, z1, ro0, ro1, bore || rimIn, bore || rimIn)];
+    if (T >= z1 - 1e-9) return [tube(z0, z1, ro0, ro1, rimIn, rimIn)];
+    const rt = lerp(ro0, ro1, (T - z0) / (z1 - z0));
+    return [tube(z0, T, ro0, rt, rimIn, rimIn), tube(T, z1, rt, ro1, bore, bore)];
+  };
+  prims.push(...deckTube(0, hs, Rs, Rs), ...deckTube(hs, zc1, Rs, Rf), ...deckTube(zc1, deck, Rf, Rf));
   if (seat && !solid) {
     prims.push(tube(0, T, hubR, hubR, holeR, holeR));
     const ns = light ? 3 : Math.max(3, Math.min(6, leg ? N : 4)), r0 = hubR - 1.5, r1 = rimIn + 1.5, hw = light ? 3 : 4;
@@ -134,12 +167,32 @@ export function buildStand(d: Design): StandModel | null {
     }
   } else {
     // pedestal: a wall on castle feet, so the cable can leave between the feet
-    const fh = Math.min(14, clear * 0.3), zf = H - fh, Lb = zf - zc1;
-    let rEnd = Rf;
-    if (type.pedestal === 'drum') prims.push(tube(zc1, zf, Rf, Rf, Rf - wall, Rf - wall));
-    else if (type.pedestal === 'cone') { rEnd = Rf + Lb * Math.tan(rad(Math.max(4, splay))); prims.push(tube(zc1, zf, Rf, rEnd, Rf - wall, rEnd - wall)); }
-    else { const w = Rf - Math.min(0.35 * Rf, Math.tan(rad(28)) * (Lb / 2)), zm = zc1 + Lb / 2; prims.push(tube(zc1, zm, Rf, w, Rf - wall, w - wall), tube(zm, zf, w, Rf, w - wall, Rf - wall)); }
-    const nf = Math.max(3, Math.min(8, N)), arc = (TAU / nf) * 0.6, M = 8;
+    const fh = Math.min(14, clear * 0.3), zf = H - fh, Lb = zf - zc1, zm = zc1 + Lb / 2;
+    const tanC = Math.tan(rad(Math.max(4, splay))), waist = Rf - Math.min(0.35 * Rf, Math.tan(rad(28)) * (Lb / 2));
+    const rAt = (z: number) => type.pedestal === 'cone' ? Rf + (z - zc1) * tanC : type.pedestal === 'hourglass' ? (z <= zm ? lerp(Rf, waist, (z - zc1) / (Lb / 2)) : lerp(waist, Rf, (z - zm) / (Lb / 2))) : Rf;
+    const rEnd = rAt(zf), nf = Math.max(3, Math.min(8, N));
+    // light: pointed windows round the wall. Their sides lean at most 39° (0.8 mm per mm), so the arch
+    // above each window prints without support even on the leaning hourglass and cone walls.
+    let win: { nw: number; zA: number; zB: number; wm: number } | null = null;
+    if (light) {
+      const nw = 2 * nf, zA = deck + 4, zB = zf - 6, hb = zB - zA, Rmx = Math.max(Rf, rAt(zA), rAt(zB), waist);
+      const wm = Math.min((TAU / nw) * 0.36, (0.8 * (hb / 2)) / Rmx);
+      if (hb > 20 && wm * Math.min(Rf, waist) >= 4) win = { nw, zA, zB, wm };
+    }
+    const zs = new Set<number>([zc1, zf]);
+    if (type.pedestal === 'hourglass') zs.add(zm);
+    if (win) for (let k = 0; k <= 24; k++) zs.add(win.zA + ((win.zB - win.zA) * k) / 24);
+    const cuts = [...zs].sort((a, b) => a - b);
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      const z0 = cuts[k], z1 = cuts[k + 1], r0 = rAt(z0), r1 = rAt(z1);
+      if (!win || z0 < win.zA - 1e-9 || z1 > win.zB + 1e-9) { prims.push(tube(z0, z1, r0, r1, r0 - wall, r1 - wall)); continue; }
+      const W = win, half = (z: number) => W.wm * (1 - Math.abs((2 * (z - (W.zA + W.zB) / 2)) / (W.zB - W.zA)));
+      for (let j = 0; j < W.nw; j++) {
+        const c0 = ((j + 0.5) / W.nw) * TAU, c1 = ((j + 1.5) / W.nw) * TAU; // column between window j and j+1
+        prims.push({ z0, z1, a: sector(c0 + half(z0), c1 - half(z0), r0 - wall, r0), b: sector(c0 + half(z1), c1 - half(z1), r1 - wall, r1), strip: true });
+      }
+    }
+    const arc = (TAU / nf) * 0.6, M = 8;
     for (let i = 0; i < nf; i++) for (let m = 0; m < M; m++) {
       const a0 = (i / nf) * TAU - arc / 2 + (arc * m) / M, a1 = a0 + arc / M, ri = rEnd - wall;
       const q: Pt[] = [[ri * Math.cos(a0), ri * Math.sin(a0)], [rEnd * Math.cos(a0), rEnd * Math.sin(a0)], [rEnd * Math.cos(a1), rEnd * Math.sin(a1)], [ri * Math.cos(a1), ri * Math.sin(a1)]];
@@ -148,9 +201,26 @@ export function buildStand(d: Design): StandModel | null {
     radius = Math.max(radius, rEnd);
   }
   if (maxOuter(d, 0) > radius * 1.6) warnings.push('The shade is much wider than the stand’s footprint: use more lean or a wider stand so it cannot tip.');
-  const holder = holderById(f.holder), need = (f.seat === 'ring' ? holder.length : 12) + 20;
+  // ballast pocket: concentric channels 10 mm wide in the deck, 1.6 mm floor, each closed by a 45° roof
+  // and a 1.6 mm lid. The print pauses where the roofs begin, so the shot is poured into open channels.
+  const voids: Prim[] = [];
+  let pause: StandModel['pause'];
+  if (ballast) {
+    const a = (bore || (seat ? holeR + seatLand(f) : 6)) + 2.4, b = Math.min(Rs - 2.4, leg ? Rc0 - halfTop - 2 : Rf - wall - 2);
+    const pz0 = 1.6, cw = 10, top = deck - 1.6, zr = top - cw / 2;
+    const n = Math.floor((b - a + 2.4) / (cw + 2.4));
+    let cm3 = 0;
+    for (let k = 0; k < n; k++) {
+      const ri = a + k * (cw + 2.4), ro = ri + cw, rm = (ri + ro) / 2;
+      voids.push(tube(pz0, zr, ro, ro, ri, ri), tube(zr, top, ro, rm + 0.05, ri, rm - 0.05));
+      cm3 += (Math.PI * (ro * ro - ri * ri) * (zr - pz0)) / 1000;
+    }
+    if (n > 0) pause = { z: zr, cm3 };
+    else warnings.push('The shade is too small for a ballast pocket in the stand.');
+  }
+  const holder = holderDef, need = (f.seat === 'ring' ? holder.length : 12) + 20;
   if (seat && clear < need) warnings.push(`The stand is ${clear} mm high; the ${holder.name} holder and its cable need about ${need} mm under the deck.`);
-  return { prims, height: H, radius, deck, rim: Rs, flange: Rf, holeR, warnings };
+  return { prims, voids, pause, bore: bore || undefined, height: H, radius, deck, rim: Rs, flange: Rf, holeR, warnings };
 }
 
 /** Size of the part that is shown and sliced (the piece, or its stand). */
@@ -163,7 +233,8 @@ export function partSize(d: Design): { height: number; diameter: number } {
 export function standSoup(m: StandModel): Float32Array {
   const out: number[] = [];
   const tri = (a: Pt, az: number, b: Pt, bz: number, c: Pt, cz: number) => { out.push(a[0], a[1], az, b[0], b[1], bz, c[0], c[1], cz); };
-  for (const p of m.prims) {
+  for (const [list, inward] of [[m.prims, false], [m.voids, true]] as const) for (const p of list) {
+    const start = out.length;
     const n = p.a.length, { z0, z1 } = p;
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
@@ -174,11 +245,20 @@ export function standSoup(m: StandModel): Float32Array {
         tri(p.b[i], z1, p.b[j], z1, p.hb[j], z1); tri(p.b[i], z1, p.hb[j], z1, p.hb[i], z1);
       }
     }
-    if (!p.ha) {
+    if (p.strip) {
+      const k = n / 2; // outer arc a[0..k-1], inner arc back a[k..n-1]
+      for (let i = 0; i + 1 < k; i++) {
+        const o0 = i, o1 = i + 1, i1 = n - 2 - i, i0 = n - 1 - i;
+        tri(p.a[o0], z0, p.a[i1], z0, p.a[o1], z0); tri(p.a[o0], z0, p.a[i0], z0, p.a[i1], z0);
+        tri(p.b[o0], z1, p.b[o1], z1, p.b[i1], z1); tri(p.b[o0], z1, p.b[i1], z1, p.b[i0], z1);
+      }
+    } else if (!p.ha) {
       const cen = (q: Pt[]): Pt => [q.reduce((s, v) => s + v[0], 0) / n, q.reduce((s, v) => s + v[1], 0) / n];
       const c0 = cen(p.a), c1 = cen(p.b);
       for (let i = 0; i < n; i++) { const j = (i + 1) % n; tri(c0, z0, p.a[j], z0, p.a[i], z0); tri(c1, z1, p.b[i], z1, p.b[j], z1); }
     }
+    // a hollow's faces point into it: swap two corners of each of its triangles
+    if (inward) for (let t = start; t < out.length; t += 9) for (let q = 0; q < 3; q++) { const v = out[t + 3 + q]; out[t + 3 + q] = out[t + 6 + q]; out[t + 6 + q] = v; }
   }
   return Float32Array.from(out);
 }
@@ -187,15 +267,20 @@ export function standSoup(m: StandModel): Float32Array {
 const toPath = (q: Pt[], rev = false): Path => { const p = q.map(([x, y]) => ({ X: toInt(x), Y: toInt(y) })); return rev ? p.reverse() : p; };
 /** The stand's solid outline at height z: outer loops counter-clockwise, holes clockwise. */
 export function standSection(m: StandModel, z: number): Paths {
-  const paths: Paths = [];
-  for (const p of m.prims) {
-    if (z < p.z0 - 1e-9 || z > p.z1 + 1e-9) continue;
-    const t = p.z1 > p.z0 ? clamp((z - p.z0) / (p.z1 - p.z0), 0, 1) : 0;
-    const mix = (a: Pt[], b: Pt[]) => a.map((v, i) => [lerp(v[0], b[i][0], t), lerp(v[1], b[i][1], t)] as Pt);
-    paths.push(toPath(mix(p.a, p.b)));
-    if (p.ha && p.hb) paths.push(toPath(mix(p.ha, p.hb), true));
-  }
-  return paths.length ? cleanPaths(union(paths), 0.002) : [];
+  const cut = (list: Prim[]) => {
+    const paths: Paths = [];
+    for (const p of list) {
+      if (z < p.z0 - 1e-9 || z > p.z1 + 1e-9) continue;
+      const t = p.z1 > p.z0 ? clamp((z - p.z0) / (p.z1 - p.z0), 0, 1) : 0;
+      const mix = (a: Pt[], b: Pt[]) => a.map((v, i) => [lerp(v[0], b[i][0], t), lerp(v[1], b[i][1], t)] as Pt);
+      paths.push(toPath(mix(p.a, p.b)));
+      if (p.ha && p.hb) paths.push(toPath(mix(p.ha, p.hb), true));
+    }
+    return paths.length ? union(paths) : [];
+  };
+  const solid = cut(m.prims), hollow = m.voids.length ? cut(m.voids) : [];
+  const out = hollow.length ? difference(solid, hollow) : solid;
+  return out.length ? cleanPaths(out, 0.002) : [];
 }
 
 export function standEstimate(d: Design, lineWidth: number, layer: number, speed: number) {
@@ -259,6 +344,7 @@ export function sliceStand(design: Design, s0: SliceSettings): GenResult {
     layer = li; layerStart.push(segs.length); layerZ.push(zTop);
     emit(';LAYER_CHANGE'); emit(`;LAYER:${li}`); emit(`;Z:${f3(zTop)}`); emit(`M73 P${Math.round((li / nLayers) * 100)}`);
     if (li === 1) emit(`M106 S${Math.round((s.fan / 100) * 255)}`);
+    const zNext = li + 1 < nLayers ? Math.min(H, flh + (li + 1) * lh) : Infinity;
     const region = standSection(m, Math.max(0, zTop - h / 2));
     const islands = toExPolygons(offset(region, -w / 2));
     const todo = islands.map((ex) => [ex.contour, ...ex.holes] as Paths);
@@ -275,6 +361,14 @@ export function sliceStand(design: Design, s0: SliceSettings): GenResult {
         }
         level = offset(level, -w); depth++;
       }
+    }
+    if (m.pause && zTop <= m.pause.z + 1e-6 && zNext > m.pause.z + 1e-6) {
+      const steel = Math.round(m.pause.cm3 * BALLAST_FILL.steel), sand = Math.round(m.pause.cm3 * BALLAST_FILL.sand);
+      emit(`; BALLAST PAUSE after layer ${li} (z ${f3(zTop)}): pour up to ${m.pause.cm3.toFixed(0)} cm3 into the open channels, level with the top of the print, then resume`);
+      emit(`; about ${steel} g steel shot or ${sand} g dry sand`);
+      travel(10, Math.min(s.bedY - 10, 200), Math.min(zTop + 10, m.height + 10));
+      emit('M117 Fill ballast pocket, then resume');
+      emit(pauseCommand(s.printer));
     }
   }
   emit(`; filament used: ${(eTot / 1000).toFixed(3)} m`);

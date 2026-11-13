@@ -13,7 +13,7 @@ import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
 import { compensate, physicsFor, simulate, type Physics, type PrintSim } from './physics';
 import { BUILDS, bulbsFor, defaultFitting, fitOpening, fittingOf, fittingWarnings, holeDia, isLamp, isStandPart, requiredFlip, SEATS, SEAT_HOLDERS, seatNeed, seatOf, minInner, type SeatKind, type StandKind } from './fitting';
-import { applyStand, partSize, STANDS } from './stand';
+import { applyStand, BALLAST_FILL, buildStand, partSize, STANDS } from './stand';
 import { holderById } from '../plugins/lumonex/catalog';
 
 // ───────── host (printer connections; only the desktop app provides one)
@@ -549,6 +549,12 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         const ped = !!STANDS.find((t) => t.id === f.stand)?.pedestal;
         kids.push(
           row('Build', seg(BUILDS.map((b) => [b.id, b.name] as [string, string]), () => f.build ?? 'standard', (v) => { F().build = v as typeof f.build; dChange(); renderPanel(); }), BUILDS.find((b) => b.id === (f.build ?? 'standard'))?.hint),
+          (f.build ?? 'standard') === 'heavy' ? (() => {
+            const pm = f.ballast ? buildStand(d)?.pause : undefined;
+            return row('Ballast pocket', toggle(() => !!f.ballast, (v) => { F().ballast = v; }, redo), pm
+              ? `Sealed pocket, ${pm.cm3.toFixed(0)} cm³: about ${Math.round(pm.cm3 * BALLAST_FILL.steel)} g steel shot or ${Math.round(pm.cm3 * BALLAST_FILL.sand)} g dry sand. The print pauses at ${pm.z.toFixed(1)} mm: pour it in level, then resume; the printer closes the pocket.`
+              : 'Adds a sealed pocket in the deck that you fill with steel shot or sand during a print pause.');
+          })() : null,
           row('Clear height', num(() => f.standHeight, (v) => { F().standHeight = v; }, 30, 250, 1, 'mm', dChange), 'Room under the deck for the holder and cable.'),
           row(ped ? 'Feet' : 'Legs', num(() => f.legs, (v) => { F().legs = v; }, 3, 8, 1, '', dChange)),
           f.stand !== 'drum' && f.stand !== 'hourglass' ? row('Lean', num(() => f.splay, (v) => { F().splay = v; }, 0, 30, 1, '°', dChange)) : null,
