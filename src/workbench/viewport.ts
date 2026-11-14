@@ -178,7 +178,10 @@ export class StudioView {
     }
     if (this.busy) { this.queued = job; return; }
     this.busy = true;
-    this.worker ??= this.meshWorker();
+    if (!this.worker) {
+      try { this.worker = this.meshWorker(); } catch { this.meshWorker = null; this.busy = false; this.request(job); return; }
+      this.worker.onerror = () => { this.worker?.terminate(); this.worker = null; this.meshWorker = null; this.busy = false; this.request(job); };
+    }
     this.worker.onmessage = (e) => {
       this.busy = false;
       const done = e.data as { id: number; ok: boolean; mesh?: BuiltMesh; q: 'quick' | 'view'; key: string };

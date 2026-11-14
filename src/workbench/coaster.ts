@@ -55,21 +55,72 @@ export const defaultCoaster = (): CoasterSet => ({
 export const caseHeight = (c: CoasterSet) => c.floor + c.count * c.thickness + 1.5;
 
 // ── outline: polygon from the polar shape, and signed distance to it (negative inside)
+// outlines are reused across rebuilds: changing a pattern or the case leaves the plate outline as it is
+const outlineCache = new Map<string, ReturnType<typeof buildOutline>>();
 function outline(c: CoasterSet) {
+  const key = `${c.section}|${c.sides}|${c.depth}|${c.diameter}`;
+  let o = outlineCache.get(key);
+  if (!o) { o = buildOutline(c); if (outlineCache.size > 6) outlineCache.clear(); outlineCache.set(key, o); }
+  return o;
+}
+function buildOutline(c: CoasterSet) {
   const N = 1440, R = c.diameter / 2, xs = new Float64Array(N), ys = new Float64Array(N), rs = new Float64Array(N);
   for (let i = 0; i < N; i++) { const th = (i / N) * Math.PI * 2, r = R * sectionMul(c, th); rs[i] = r; xs[i] = r * Math.cos(th); ys[i] = r * Math.sin(th); }
-  const win = 260;
+  // segment buckets: nearest-segment search ring by ring (exact, ~50x faster than a fixed window)
+  const B = Math.max(0.5, R / 40), G0 = -R * 1.6 - 30, GN = Math.ceil((R * 3.2 + 60) / B);
+  const buckets: number[][] = Array.from({ length: GN * GN }, () => []);
+  const cl = (v: number) => Math.min(GN - 1, Math.max(0, Math.floor((v - G0) / B)));
+  for (let a = 0; a < N; a++) {
+    const b = (a + 1) % N, i0 = cl(Math.min(ys[a], ys[b])), i1 = cl(Math.max(ys[a], ys[b])), j0 = cl(Math.min(xs[a], xs[b])), j1 = cl(Math.max(xs[a], xs[b]));
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) buckets[i * GN + j].push(a);
+  }
+  const segD = (a: number, x: number, y: number) => {
+    const b = (a + 1) % N, ax = xs[a], ay = ys[a], bx = xs[b] - ax, by = ys[b] - ay;
+    const t = Math.min(1, Math.max(0, ((x - ax) * bx + (y - ay) * by) / (bx * bx + by * by)));
+    return (x - ax - bx * t) ** 2 + (y - ay - by * t) ** 2;
+  };
+  // exact distance by ring search (used once per cell centre)
+  const ringD = (x: number, y: number) => {
+    const ci = Math.floor((y - G0) / B), cj = Math.floor((x - G0) / B);
+    let best = Infinity;
+    for (let ring = 0; ring < GN; ring++) {
+      for (let i = ci - ring; i <= ci + ring; i++) {
+        if (i < 0 || i >= GN) continue;
+        const edge = i === ci - ring || i === ci + ring;
+        for (let j = cj - ring; j <= cj + ring; j += edge ? 1 : 2 * ring || 1) {
+          if (j < 0 || j >= GN) continue;
+          for (const a of buckets[i * GN + j]) { const d = segD(a, x, y); if (d < best) best = d; }
+        }
+      }
+      if (best < Infinity && Math.sqrt(best) <= ring * B) break;
+    }
+    return Math.sqrt(best);
+  };
+  // per cell: distance at its centre, and the only segments that can be nearest anywhere in it
+  const hd = B * Math.SQRT1_2, CLAMP = 40, stamp = new Int32Array(N); let stampN = 0;
+  const cellD = new Float32Array(GN * GN).fill(-1), cand: (Int32Array | null)[] = new Array(GN * GN).fill(null);
+  const cellOf = (ci: number, cj: number) => {
+    const id = ci * GN + cj;
+    if (cellD[id] >= 0) return id;
+    const cx = G0 + (cj + 0.5) * B, cy = G0 + (ci + 0.5) * B, D = ringD(cx, cy);
+    cellD[id] = D;
+    if (D <= CLAMP) {
+      const lim = D + 2 * hd, r = Math.ceil(lim / B) + 1, list: number[] = []; stampN++;
+      for (let i = Math.max(0, ci - r); i <= Math.min(GN - 1, ci + r); i++) for (let j = Math.max(0, cj - r); j <= Math.min(GN - 1, cj + r); j++)
+        for (const a of buckets[i * GN + j]) if (stamp[a] !== stampN) { stamp[a] = stampN; if (segD(a, cx, cy) <= lim * lim) list.push(a); }
+      cand[id] = Int32Array.from(list);
+    }
+    return id;
+  };
   const sd = (x: number, y: number) => {
     const th = Math.atan2(y, x), fi = (((th / (Math.PI * 2)) % 1) + 1) % 1 * N, i0 = Math.floor(fi);
     const rr = rs[i0 % N] + (rs[(i0 + 1) % N] - rs[i0 % N]) * (fi - i0), inside = Math.hypot(x, y) < rr;
-    let best = Infinity;
-    for (let k = -win; k < win; k++) {
-      const a = (i0 + k + N) % N, b = (a + 1) % N, ax = xs[a], ay = ys[a], bx = xs[b] - ax, by = ys[b] - ay;
-      const t = Math.min(1, Math.max(0, ((x - ax) * bx + (y - ay) * by) / (bx * bx + by * by)));
-      const d = (x - ax - bx * t) ** 2 + (y - ay - by * t) ** 2;
-      if (d < best) best = d;
-    }
-    return inside ? -Math.sqrt(best) : Math.sqrt(best);
+    const ci = Math.min(GN - 1, Math.max(0, Math.floor((y - G0) / B))), cj = Math.min(GN - 1, Math.max(0, Math.floor((x - G0) / B)));
+    const id = cellOf(ci, cj), list = cand[id];
+    let dist: number;
+    if (list) { let best = Infinity; for (let k = 0; k < list.length; k++) { const d = segD(list[k], x, y); if (d < best) best = d; } dist = Math.sqrt(best); }
+    else dist = cellD[id];                                  // far from every contour: only the sign matters
+    return inside ? -dist : dist;
   };
   return { sd, R };
 }
