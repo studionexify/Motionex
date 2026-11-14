@@ -157,6 +157,14 @@ describe('table shade stands', () => {
       expect(+zBefore.slice(3)).toBeLessThanOrEqual(p.z + 1e-6); expect(+zAfter.slice(3)).toBeGreaterThan(p.z);
       expect(r.gcode).toMatch(/BALLAST PAUSE/);
     }
+    // pocket depth: deeper deck, more ballast, later pause; clamped to its range
+    const at = (depth: number) => { const d = defaultDesign('shade'); d.fitting = { ...fittingOf(d), build: 'heavy', ballast: true, ballastDepth: depth }; d.part = 'stand'; return buildStand(d)!; };
+    const lo = at(6), mid = at(12), hi = at(40);
+    expect(mid.deck - lo.deck).toBeCloseTo(6, 6); expect(hi.deck - mid.deck).toBeCloseTo(28, 6);
+    expect(lo.pause!.cm3).toBeGreaterThan(10); expect(hi.pause!.cm3).toBeGreaterThan(mid.pause!.cm3 * 3);
+    expect(hi.pause!.z).toBeGreaterThan(mid.pause!.z);
+    expect(at(2).deck).toBeCloseTo(lo.deck, 6); expect(at(99).deck).toBeCloseTo(hi.deck, 6);
+    for (const m of [lo, hi]) { let prev = standSection(m, 0.01); for (let z = 0.4; z < m.deck + 2; z += 0.4) { const cur = standSection(m, z); for (const p of cur) for (const q of p) { const x = q.X / SCALE, y = q.Y / SCALE; let ok = pointIn(x, y, prev); for (let a = 0; !ok && a < 16; a++) ok = pointIn(x + 0.53 * Math.cos(a * TAU / 16), y + 0.53 * Math.sin(a * TAU / 16), prev); expect(ok, `depth ${m.deck} z ${z}`).toBe(true); } prev = cur; } }
     expect(pauseCommand('elegoo-n4max')).toBe('PAUSE'); expect(pauseCommand('bbl-p1s')).toBe('M400 U1'); expect(pauseCommand('other')).toBe('M601');
   });
   it('light pedestals have pointed windows through the wall', () => {

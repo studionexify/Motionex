@@ -13,7 +13,7 @@ import { StudioView, type ColorBy, type PathStyle } from './viewport';
 import { newRule, prepareRules, ruleWeight, rowsToRects, type Rule } from './rules';
 import { compensate, physicsFor, simulate, type Physics, type PrintSim } from './physics';
 import { BUILDS, bulbsFor, defaultFitting, fitOpening, fittingOf, fittingWarnings, holeDia, isLamp, isStandPart, requiredFlip, SEATS, SEAT_HOLDERS, seatNeed, seatOf, minInner, type SeatKind, type StandKind } from './fitting';
-import { applyStand, BALLAST_FILL, buildStand, partSize, STANDS } from './stand';
+import { applyStand, BALLAST_DEPTH, BALLAST_FILL, buildStand, partSize, STANDS } from './stand';
 import { holderById } from '../plugins/lumonex/catalog';
 
 // ───────── host (printer connections; only the desktop app provides one)
@@ -549,11 +549,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
         const ped = !!STANDS.find((t) => t.id === f.stand)?.pedestal;
         kids.push(
           row('Build', seg(BUILDS.map((b) => [b.id, b.name] as [string, string]), () => f.build ?? 'standard', (v) => { F().build = v as typeof f.build; dChange(); renderPanel(); }), BUILDS.find((b) => b.id === (f.build ?? 'standard'))?.hint),
-          (f.build ?? 'standard') === 'heavy' ? (() => {
-            const pm = f.ballast ? buildStand(d)?.pause : undefined;
-            return row('Ballast pocket', toggle(() => !!f.ballast, (v) => { F().ballast = v; }, redo), pm
-              ? `Sealed pocket, ${pm.cm3.toFixed(0)} cm³: about ${Math.round(pm.cm3 * BALLAST_FILL.steel)} g steel shot or ${Math.round(pm.cm3 * BALLAST_FILL.sand)} g dry sand. The print pauses at ${pm.z.toFixed(1)} mm: pour it in level, then resume; the printer closes the pocket.`
-              : 'Adds a sealed pocket in the deck that you fill with steel shot or sand during a print pause.');
+          (f.build ?? 'standard') === 'heavy' ? row('Ballast pocket', toggle(() => !!f.ballast, (v) => { F().ballast = v; }, redo)) : null,
+          (f.build ?? 'standard') === 'heavy' && f.ballast ? (() => {
+            // live: the pocket, its fill weight and the pause height follow the slider as it moves
+            const info = () => { const pm = buildStand(d)?.pause; return pm ? `Pocket ${pm.cm3.toFixed(0)} cm³: about ${Math.round(pm.cm3 * BALLAST_FILL.steel)} g steel shot or ${Math.round(pm.cm3 * BALLAST_FILL.sand)} g dry sand. The print pauses at ${pm.z.toFixed(1)} mm: pour it in level, then resume; the printer closes the pocket.` : 'The shade is too small for a ballast pocket.'; };
+            const r = row('Pocket depth', num(() => f.ballastDepth ?? BALLAST_DEPTH.def, (v) => { F().ballastDepth = v; }, BALLAST_DEPTH.min, BALLAST_DEPTH.max, 1, 'mm', () => { dChange(); hint.textContent = info(); }), 'x');
+            const hint = r.querySelector('.mxs-rhint') as HTMLElement; hint.textContent = info();
+            return r;
           })() : null,
           row('Clear height', num(() => f.standHeight, (v) => { F().standHeight = v; }, 30, 250, 1, 'mm', dChange), 'Room under the deck for the holder and cable.'),
           row(ped ? 'Feet' : 'Legs', num(() => f.legs, (v) => { F().legs = v; }, 3, 8, 1, '', dChange)),

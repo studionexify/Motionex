@@ -53,6 +53,8 @@ export interface StandModel {
 }
 /** Bulk densities (g/cm³) for the fill guide. */
 export const BALLAST_FILL = { steel: 4.6, sand: 1.6 };
+/** Extra deck depth for the pocket (mm). The minimum still leaves fillable channel under the 5 mm roof. */
+export const BALLAST_DEPTH = { min: 6, def: 12, max: 40 };
 /** Pause command per machine (what each one's own slicer uses for a pause at a layer). */
 const PAUSE_CMD: Record<string, string> = { 'bbl-a1': 'M400 U1', 'bbl-p1s': 'M400 U1', 'elegoo-n4max': 'PAUSE', 'snapmaker-u1': 'PAUSE' };
 export const pauseCommand = (printer: string) => PAUSE_CMD[printer] ?? 'M601';
@@ -85,8 +87,8 @@ export function buildStand(d: Design): StandModel | null {
   const Rs = Math.max(12, Math.min(minInner(d, 0), minInner(d, hs / 2), minInner(d, hs)) - 0.3);
   const step = clamp(d.wall + 1.5, 2.5, 6), Rf = Rs + step, zc1 = hs + step, deck0 = zc1 + 2;
   const build = f.build ?? 'standard', light = build === 'light', heavy = build === 'heavy';
-  // heavy + ballast: the deck grows 12 mm deeper to hold a sealed pocket for steel shot or sand
-  const ballast = heavy && !!f.ballast, bd = ballast ? 12 : 0;
+  // heavy + ballast: the deck grows `ballastDepth` mm deeper to hold a sealed pocket for steel shot or sand
+  const ballast = heavy && !!f.ballast, bd = ballast ? clamp(f.ballastDepth ?? BALLAST_DEPTH.def, BALLAST_DEPTH.min, BALLAST_DEPTH.max) : 0;
   const clear = clamp(f.standHeight, 20, 400), H = deck0 + bd + clear, L = H - zc1;
   const size = clamp(f.legSize * (light ? 0.85 : heavy ? 1.35 : 1), 5, 54), N = Math.round(clamp(f.legs || type.legs, 3, 12)), splay = clamp(f.splay, 0, 35);
   const prims: Prim[] = [];

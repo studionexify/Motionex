@@ -39,6 +39,8 @@ export interface Fitting {
   build?: StandBuild;
   /** Heavy build: a sealed pocket in the deck, filled with steel shot or sand during a print pause. */
   ballast?: boolean;
+  /** How much deeper the deck grows to hold the pocket (mm): deeper = more ballast, longer print. */
+  ballastDepth?: number;
 }
 export type StandBuild = 'light' | 'standard' | 'heavy';
 export const BUILDS: { id: StandBuild; name: string; hint: string }[] = [
