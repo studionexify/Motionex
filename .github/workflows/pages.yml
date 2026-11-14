@@ -5,11 +5,10 @@
 # GitHub Pages sites of a public repository are public: Cloudflare Access and web/public/_headers do not apply here.
 name: Web app (GitHub Pages)
 
+# Disabled: the app is not published on GitHub Pages (it is served privately from Cloudflare Pages).
+# It only runs when started by hand from the Actions tab.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths-ignore: ['**.md', 'docs/**']
 
 permissions:
   contents: read
