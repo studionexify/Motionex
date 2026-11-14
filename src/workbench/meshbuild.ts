@@ -2,22 +2,46 @@
 // STL export. CAD-like result: rounds get ≥1440 segments (≤0.25°, <0.001 mm chord error), reliefs are
 // sampled at a fraction of a millimetre with their outlines traced exactly, flat stretches are merged,
 // and normals are smooth across curves but split at real creases (> 25°), so edges read sharp.
-import * as THREE from 'three';
-import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { surfaceGrid, triangulate } from './surfacegrid';
-import { makeInner, type Design } from './design';
+import { faceMesh } from './tessellate';
+import { makeInner, surfaceParts, type Design } from './design';
 import { isStandPart, seatOf } from './fitting';
 import { buildStand, standSoup } from './stand';
 
 export type MeshQuality = 'quick' | 'view' | 'export';
-const SPEC: Record<MeshQuality, { relief: number; plainRow: number; minCols: number; maxVerts: number; snap: boolean }> = {
-  quick: { relief: 1.2, plainRow: 2, minCols: 360, maxVerts: 120_000, snap: false },
-  view: { relief: 0.5, plainRow: 1.0, minCols: 1440, maxVerts: 800_000, snap: true },
-  export: { relief: 0.3, plainRow: 0.6, minCols: 1440, maxVerts: 2_000_000, snap: true },
+const SPEC: Record<MeshQuality, { relief: number; plainRow: number; minCols: number; maxVerts: number; snap: boolean; levels?: number[]; finest: number; perFeature: number; smooth?: boolean }> = {
+  // quick: still traced (no staircase), just coarser — the fast preview while editing
+  quick: { relief: 1.0, plainRow: 2.5, minCols: 480, maxVerts: 200_000, snap: true, levels: [0.5], finest: 0.6, perFeature: 2.2, smooth: true },
+  view: { relief: 0.6, plainRow: 1.0, minCols: 1440, maxVerts: 700_000, snap: true, levels: [0.15, 0.85], finest: 0.3, perFeature: 4 },
+  export: { relief: 0.3, plainRow: 0.6, minCols: 1440, maxVerts: 2_400_000, snap: true, levels: [0.15, 0.85], finest: 0.15, perFeature: 4 },
 };
 
+/** Narrowest feature of the relief (mm): smallest plateau or line width, measured along both directions
+ *  of the pattern. Thin lines need several mesh rows across them to come out clean. */
+function finestFeature(d: Design): number {
+  const rl = d.relief, R = d.maxDiameter / 2;
+  if (rl.kind === 'smooth' || rl.depth === 0) return Infinity;
+  const n = Math.max(1, rl.count), cellMM = (2 * Math.PI * R) / n;
+  const parts = surfaceParts(d, rl.side === 'inside' ? 'inner' : 'outer');
+  const z0 = d.height * 0.5, S = 1200, runs: number[] = [];
+  const scan = (fz: (k: number) => number, fth: (k: number) => number, mmPer: number) => {
+    let lo = Infinity, hi = -Infinity; const v = new Float32Array(S);
+    for (let k = 0; k < S; k++) { v[k] = Math.abs(parts.rel(fz(k), fth(k))); lo = Math.min(lo, v[k]); hi = Math.max(hi, v[k]); }
+    if (hi - lo < 1e-3) return;
+    const mid = (lo + hi) / 2; let last = -1;
+    for (let k = 1; k < S; k++) if ((v[k] - mid) * (v[k - 1] - mid) < 0) { if (last >= 0) runs.push((k - last) * mmPer); last = k; }
+  };
+  for (const dz of [0, 0.31, 0.57]) scan(() => z0 + dz * cellMM, (k) => ((k / S) * 3 * 2 * Math.PI) / n, (3 * cellMM) / S);   // round
+  for (const a of [0, 0.37]) scan((k) => Math.min(d.height, z0 - 1.5 * cellMM + (k / S) * 3 * cellMM), () => ((a + 0.1) * 2 * Math.PI) / n, (3 * cellMM) / S);   // up
+  if (!runs.length) return Infinity;
+  runs.sort((x, y) => x - y);
+  return runs[Math.floor(runs.length * 0.1)];
+}
+
 function gridSize(d: Design, q: MeshQuality, face: 'outer' | 'inner') {
-  const sp = SPEC[q], R = d.maxDiameter / 2, rl = d.relief;
+  const sp0 = SPEC[q], R = d.maxDiameter / 2, rl = d.relief;
+  const fine = finestFeature(d);
+  const sp = { ...sp0, relief: Math.max(sp0.finest, Math.min(sp0.relief, fine / sp0.perFeature)) };
   const relief = rl.kind !== 'smooth' && rl.depth !== 0 && (face === 'outer' ? rl.side !== 'inside' : rl.side === 'inside' || rl.side === 'both');
   let cols = Math.max(sp.minCols, d.section !== 'round' ? d.sides * 48 : 0, relief ? Math.ceil((2 * Math.PI * R) / sp.relief) : 0);
   let rows = Math.ceil(d.height / (relief ? sp.relief : sp.plainRow));
@@ -38,42 +62,46 @@ export interface BuiltMesh {
 /** The stand of a table shade as a mesh (print orientation: deck down). */
 function standMesh(d: Design): BuiltMesh | null {
   const m = buildStand(d); if (!m) return null;
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(standSoup(m), 3));
-  const creased = toCreasedNormals(geo, (25 * Math.PI) / 180);
-  const position = creased.getAttribute('position').array as Float32Array;
-  return { position, normal: creased.getAttribute('normal').array as Float32Array, src: new Uint32Array(position.length / 3), outer: { rows: 1, cols: 1, pos: new Float32Array(12) }, inner: { rows: 1, cols: 1 }, triangles: position.length / 9 };
+  const soup = standSoup(m), n = soup.length / 3, idx = new Uint32Array(n);
+  for (let k = 0; k < n; k++) idx[k] = k;
+  const { position, normal } = creasedNormals(soup, idx, Math.cos((25 * Math.PI) / 180));
+  return { position, normal, src: new Uint32Array(position.length / 3), outer: { rows: 1, cols: 1, pos: new Float32Array(12) }, inner: { rows: 1, cols: 1 }, triangles: position.length / 9 };
 }
 
 export function buildMesh(d: Design, q: MeshQuality): BuiltMesh {
   if (isStandPart(d)) { const sm = standMesh(d); if (sm) return sm; }
   // both faces share the angular division (the rim joins them point for point)
   const o = gridSize(d, q, 'outer'), i2 = gridSize(d, q, 'inner'), cols = Math.max(o.cols, i2.cols);
-  const go = surfaceGrid(d, o.rows, cols, 'outer', SPEC[q].snap), gi = surfaceGrid(d, i2.rows, cols, 'inner', SPEC[q].snap);
   const W = cols + 1, G = (o.rows + 1) * W, G2 = (i2.rows + 1) * W;
   const seat = seatOf(d), open = d.openBottom || !!seat;
   const floor = open ? 0 : Math.min(d.height * 0.3, d.wall * 0.6 + 1.2);
-  const pos = new Float32Array((G + G2 + 2 + (seat ? 4 * W : 0)) * 3);
-  pos.set(go.pos, 0); pos.set(gi.pos, G * 3);
-  if (!open) for (let k = G * 3; k < (G + G2) * 3; k += 3) pos[k + 2] = Math.max(pos[k + 2], floor);
-  const cBot = G + G2, cFloor = cBot + 1;
-  pos[cBot * 3 + 2] = 0; pos[cFloor * 3 + 2] = floor;
   const eps = Math.max(1e-4, Math.abs(d.relief.depth) * 0.002);
   // flat stretches: largest block whose fan stays within 0.02 mm of the true surface (chord ≤ √(8·R·tol))
   const Rmin = Math.max(5, (d.maxDiameter / 2) * 0.5), blockMM = Math.min(8, Math.sqrt(8 * Rmin * 0.02) * 1.4);
   const C = (2 * Math.PI * d.maxDiameter / 2) / cols;
-  const idx: number[] = [];
-  const push = (a: Uint32Array) => { for (let k = 0; k < a.length; k++) idx.push(a[k]); };
-  push(triangulate(go, d.height / o.rows, C, eps, false, 0, blockMM));
-  push(triangulate(gi, d.height / i2.rows, C, eps, true, G, blockMM));
-  const topO = o.rows * W, topI = G + i2.rows * W;
+  // each face: exact edge-cut tessellation for sharp reliefs, otherwise the smooth grid mesher
+  const face = (f: 'outer' | 'inner', rows: number, flip: boolean) => {
+    const fm = faceMesh(d, rows, cols, f, blockMM, flip);
+    if (fm) return fm;
+    const g = surfaceGrid(d, rows, cols, f, false);
+    const Gf = (rows + 1) * W, srcf = new Uint32Array(Gf); for (let k = 0; k < Gf; k++) srcf[k] = k;
+    return { pos: g.pos, idx: triangulate(g, d.height / rows, C, eps, flip, 0, blockMM), src: srcf, G: Gf };
+  };
+  const fo = face('outer', o.rows, false), fi = face('inner', i2.rows, true);
+  const No = fo.pos.length / 3, Ni = fi.pos.length / 3, cBot = No + Ni, cFloor = cBot + 1;
+  const S0 = No + Ni + 2;
+  const pos = new Float32Array((S0 + (seat ? 4 * W : 0)) * 3);
+  pos.set(fo.pos, 0); pos.set(fi.pos, No * 3);
+  if (!open) for (let k = No * 3; k < (No + Ni) * 3; k += 3) pos[k + 2] = Math.max(pos[k + 2], floor);
+  pos[cBot * 3 + 2] = 0; pos[cFloor * 3 + 2] = floor;
+  const rest: number[] = [];
+  const topO = o.rows * W, topI = No + i2.rows * W;
   for (let j = 0; j < cols; j++) {
-    idx.push(topO + j, topO + j + 1, topI + j + 1, topO + j, topI + j + 1, topI + j);     // rim
-    if (open) idx.push(j, G + j + 1, j + 1, j, G + j, G + j + 1);
-    else idx.push(cBot, j + 1, j, cFloor, G + j, G + j + 1);
+    rest.push(topO + j, topO + j + 1, topI + j + 1, topO + j, topI + j + 1, topI + j);     // rim
+    if (open) rest.push(j, No + j + 1, j + 1, j, No + j, No + j + 1);
+    else rest.push(cBot, j + 1, j, cFloor, No + j, No + j + 1);
   }
   // lamp holder seat: a flat ring from the hole out into the wall (its rim is buried half a wall deep)
-  const S0 = cFloor + 1;
   if (seat) {
     const inner = makeInner(d), bury = d.wall / 2;
     for (let j = 0; j < W; j++) {
@@ -84,21 +112,23 @@ export function buildMesh(d: Design, q: MeshQuality): BuiltMesh {
     }
     for (let j = 0; j < cols; j++) {
       const o0 = S0 + j, o1 = S0 + W + j, h0 = S0 + 2 * W + j, h1 = S0 + 3 * W + j;
-      idx.push(o0, h0 + 1, o0 + 1, o0, h0, h0 + 1);       // underside
-      idx.push(o1, o1 + 1, h1 + 1, o1, h1 + 1, h1);       // top
-      idx.push(h0, h1 + 1, h0 + 1, h0, h1, h1 + 1);       // hole wall
-      idx.push(o0, o0 + 1, o1 + 1, o0, o1 + 1, o1);       // rim (inside the wall)
+      rest.push(o0, h0 + 1, o0 + 1, o0, h0, h0 + 1);       // underside
+      rest.push(o1, o1 + 1, h1 + 1, o1, h1 + 1, h1);       // top
+      rest.push(h0, h1 + 1, h0 + 1, h0, h1, h1 + 1);       // hole wall
+      rest.push(o0, o0 + 1, o1 + 1, o0, o1 + 1, o1);       // rim (inside the wall)
     }
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setIndex(idx);
-  // seat vertices take the base colour of the floor point
-  const src = Uint32Array.from(idx, (k) => (k >= S0 ? cFloor : k));
-  const creased = toCreasedNormals(geo, (25 * Math.PI) / 180);
+  const idx = new Uint32Array(fo.idx.length + fi.idx.length + rest.length);
+  idx.set(fo.idx, 0);
+  for (let k = 0; k < fi.idx.length; k++) idx[fo.idx.length + k] = fi.idx[k] + No;
+  idx.set(rest, fo.idx.length + fi.idx.length);
+  const { position, normal } = creasedNormals(pos, idx, Math.cos((25 * Math.PI) / 180));
+  // per corner: the grid point it belongs to (for painting rule colours)
+  const src = new Uint32Array(idx.length);
+  for (let k = 0; k < idx.length; k++) { const v = idx[k]; src[k] = v < No ? fo.src[v] : v < No + Ni ? G + fi.src[v - No] : v >= S0 ? G + G2 + 1 : G + G2 + (v - No - Ni); }
   return {
-    position: creased.getAttribute('position').array as Float32Array, normal: creased.getAttribute('normal').array as Float32Array, src,
-    outer: { rows: o.rows, cols, pos: go.pos }, inner: { rows: i2.rows, cols }, triangles: idx.length / 3,
+    position, normal, src,
+    outer: { rows: o.rows, cols, pos: fo.pos.subarray(0, G * 3) }, inner: { rows: i2.rows, cols }, triangles: idx.length / 3,
   };
 }
 
@@ -116,4 +146,38 @@ export function meshToStl(m: BuiltMesh): ArrayBuffer {
     o += 2;
   }
   return buf;
+}
+
+/** Expanded triangles with crease-aware normals: each corner averages only the neighbouring faces that bend
+ *  less than the crease angle, so curves shade smooth and real edges stay sharp. Flat arrays, no objects. */
+function creasedNormals(pos: Float32Array, idx: Uint32Array, cosCrease: number) {
+  const T = idx.length / 3, nv = pos.length / 3;
+  const fn = new Float32Array(T * 3);
+  for (let t = 0; t < T; t++) {
+    const a = idx[t * 3] * 3, b = idx[t * 3 + 1] * 3, c = idx[t * 3 + 2] * 3;
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2], wx = pos[c] - pos[a], wy = pos[c + 1] - pos[a + 1], wz = pos[c + 2] - pos[a + 2];
+    fn[t * 3] = uy * wz - uz * wy; fn[t * 3 + 1] = uz * wx - ux * wz; fn[t * 3 + 2] = ux * wy - uy * wx;   // area-weighted
+  }
+  // faces around each vertex (CSR)
+  const cnt = new Uint32Array(nv + 1);
+  for (let k = 0; k < idx.length; k++) cnt[idx[k] + 1]++;
+  for (let v = 0; v < nv; v++) cnt[v + 1] += cnt[v];
+  const fill = cnt.slice(0, nv), adj = new Uint32Array(idx.length);
+  for (let k = 0; k < idx.length; k++) adj[fill[idx[k]]++] = (k / 3) | 0;
+  const position = new Float32Array(T * 9), normal = new Float32Array(T * 9);
+  for (let t = 0; t < T; t++) {
+    const nx0 = fn[t * 3], ny0 = fn[t * 3 + 1], nz0 = fn[t * 3 + 2], l0 = Math.hypot(nx0, ny0, nz0) || 1;
+    for (let c = 0; c < 3; c++) {
+      const v = idx[t * 3 + c], o = (t * 3 + c) * 3;
+      position[o] = pos[v * 3]; position[o + 1] = pos[v * 3 + 1]; position[o + 2] = pos[v * 3 + 2];
+      let sx = 0, sy = 0, sz = 0;
+      for (let q = cnt[v]; q < cnt[v + 1]; q++) {
+        const f = adj[q], fx = fn[f * 3], fy = fn[f * 3 + 1], fz = fn[f * 3 + 2], lf = Math.hypot(fx, fy, fz) || 1;
+        if ((fx * nx0 + fy * ny0 + fz * nz0) / (lf * l0) >= cosCrease) { sx += fx; sy += fy; sz += fz; }
+      }
+      const l = Math.hypot(sx, sy, sz) || 1;
+      normal[o] = sx / l; normal[o + 1] = sy / l; normal[o + 2] = sz / l;
+    }
+  }
+  return { position, normal };
 }

@@ -139,24 +139,63 @@ export class StudioView {
   private worker: Worker | null = null;
   private meshSeq = 0;
   private built: BuiltMesh | null = null;
-  /** Show the piece: a coarse mesh at once while editing, then the CAD-quality mesh (in the background). */
+  /** Show the piece. Meshes are built in the background (when a worker is available): a light traced
+   *  preview while you edit, the full-quality mesh once you pause. Only the newest request waits in line,
+   *  and changes that don't touch the shape (colour) never rebuild. */
+  private shapeKey = '';
+  private busy = false;
+  private queued: { d: Design; q: 'quick' | 'view'; key: string; seq: number } | null = null;
+  private lastApplied = 0;
+  private builtQ: 'quick' | 'view' | null = null;
+  /** shape key of the full-quality mesh on screen */
+  private viewKey = '';
+  private idle = 0;
   setDesign(d: Design, color = '#ece6dc', quick = false) {
-    this.design = d; this.surf = makeSurface(d); this.baseColor.set(color);
-    const seq = ++this.meshSeq;
+    this.design = d; this.surf = makeSurface(d);
+    const colourOnly = this.baseColor.getHexString() !== new THREE.Color(color).getHexString();
+    this.baseColor.set(color);
     const firstFrame = this.gridSize === 0;
     const size = partSize(d);
     this.height = size.height; this.gridSize = size.diameter; this.buildGrid();
     this.buildGhosts(d);
     if (firstFrame) this.fit();
-    if (quick || !this.built) this.applyMesh(buildMesh(d, 'quick'));
-    if (quick) return;
-    if (this.meshWorker) {
-      this.worker ??= this.meshWorker();
-      this.worker.onmessage = (e) => { if (e.data.id === this.meshSeq && e.data.ok && e.data.mesh) this.applyMesh(e.data.mesh); };
-      this.worker.postMessage({ id: seq, kind: 'view', design: JSON.parse(JSON.stringify(d)) });
-    } else {
-      setTimeout(() => { if (seq === this.meshSeq) this.applyMesh(buildMesh(d, 'view')); }, 0);
+    const key = JSON.stringify({ ...d, name: '' });
+    if (key === this.shapeKey && this.built) {
+      if (colourOnly) { this.paintMesh(); this.draw(); }
+      if (quick || this.viewKey === key) return;                    // nothing new to build
+      clearTimeout(this.idle);
+      this.idle = window.setTimeout(() => { if (this.shapeKey === key) this.request({ d, q: 'view', key, seq: ++this.meshSeq }); }, 350);
+      return;
     }
+    this.shapeKey = key;
+    const seq = ++this.meshSeq;
+    clearTimeout(this.idle);
+    this.request({ d, q: 'quick', key, seq });
+    if (!quick) this.idle = window.setTimeout(() => { if (this.shapeKey === key) this.request({ d, q: 'view', key, seq: ++this.meshSeq }); }, 350);
+  }
+  private request(job: { d: Design; q: 'quick' | 'view'; key: string; seq: number }) {
+    if (!this.meshWorker) {
+      // no worker (single-page build): quick preview now, full quality only after a longer pause
+      if (job.q === 'quick') this.take(buildMesh(job.d, 'quick'), job);
+      else { clearTimeout(this.idle); this.idle = window.setTimeout(() => { if (this.shapeKey === job.key) this.take(buildMesh(job.d, 'view'), job); }, 900); }
+      return;
+    }
+    if (this.busy) { this.queued = job; return; }
+    this.busy = true;
+    this.worker ??= this.meshWorker();
+    this.worker.onmessage = (e) => {
+      this.busy = false;
+      const done = e.data as { id: number; ok: boolean; mesh?: BuiltMesh; q: 'quick' | 'view'; key: string };
+      if (done.ok && done.mesh) this.take(done.mesh, { q: done.q, key: done.key, seq: done.id });
+      const next = this.queued; this.queued = null;
+      if (next && next.key === this.shapeKey) this.request(next);
+    };
+    this.worker.postMessage({ id: job.seq, kind: 'view', quality: job.q, key: job.key, design: JSON.parse(JSON.stringify(job.d)) });
+  }
+  private take(m: BuiltMesh, job: { q: 'quick' | 'view'; key: string; seq: number }) {
+    if (job.seq < this.lastApplied) return;                          // something newer is already shown
+    this.lastApplied = job.seq; this.builtQ = job.q; this.viewKey = job.q === 'view' ? job.key : '';
+    this.applyMesh(m);
   }
   /** Lamp holder and bulb, see-through and never printed: shows that the chosen bulb really fits. */
   private ghost: THREE.Group | null = null;

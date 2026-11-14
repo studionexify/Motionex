@@ -18,7 +18,8 @@ export interface Relief {
   /** Edge softness 0 (knife-sharp) … 1 (rounded). */
   edge?: number;
 }
-import { PATTERNS, patternById, sampleMapCubic, sampleMapVector, setEdge, type HeightMap } from './reliefs';
+import { bevelH, geoSd, mapGeo, patternGeo, type Geo } from './patterngeo';
+import { PATTERNS, patternById, sampleMapCubic, sampleMapVector, setEdge, setMinLine, type HeightMap } from './reliefs';
 import { defaultFitting, fitOpening, seatOf, type Fitting } from './fitting';
 import { standEstimate } from './stand';
 export type TwistShape = 'linear' | 's' | 'wave';
@@ -161,9 +162,11 @@ function vnoise(x: number, y: number, z: number) {
 
 /** Relief offset in mm (outward positive) at height t and angle θ for a wall of base radius R. */
 /** Cumulative cell rows from the base up to height fraction t: ∫ n / (2πR) · ds along the side profile. Cached per shape. */
-let rowKey = '', rowTab: Float64Array = new Float64Array(0);
+let rowKey = NaN, rowTab: Float64Array = new Float64Array(0);
 function cellRows(d: Design, t: number, n: number): number {
-  const key = `${d.height}|${d.maxDiameter}|${d.narrowTop}|${d.smoothing}|${n}|${JSON.stringify(d.profile)}`;
+  // cheap numeric fingerprint of everything the table depends on (this runs for every relief sample)
+  let key = d.height * 1.000003 + d.maxDiameter * 7.13 + d.narrowTop * 131.7 + d.smoothing * 977.1 + n * 3.7 + d.profile.length * 11.9;
+  for (let i = 0; i < d.profile.length; i++) key += d.profile[i].r * (13.37 + i * 5.1) + d.profile[i].t * (71.3 + i * 3.3);
   const N = 1024;
   if (key !== rowKey) {
     rowKey = key; rowTab = new Float64Array(N + 1);
@@ -179,7 +182,7 @@ function cellRows(d: Design, t: number, n: number): number {
   return rowTab[i] + (rowTab[i + 1] - rowTab[i]) * f;
 }
 
-export function relief(d: Design, t: number, th: number, R: number): number {
+export function relief(d: Design, t: number, th: number, R: number, raw = false): number {
   const rl = d.relief;
   if (rl.kind === 'smooth' || rl.depth === 0) return 0;
   const tr = Math.max(1e-3, rl.transition);
@@ -208,15 +211,18 @@ export function relief(d: Design, t: number, th: number, R: number): number {
       // pattern library / imported height map
       const vv = v / Math.max(0.1, rl.aspect ?? 1);
       const uu = u + vv * Math.tan(((rl.slant ?? 0) * Math.PI) / 180) + Math.floor(vv) * (rl.rowShift ?? 0);
+      const gp = geoOf(d, cell, raw);
       if (rl.kind === 'image') {
         if (!rl.map) return 0;
         setEdge(rl.edge ?? 0.15);
         const y = rl.mapMode === 'band' ? 1 - frac(clamp((t - rl.start) / Math.max(1e-3, rl.end - rl.start), 0, 0.9999) * Math.max(1, rl.tilesUp ?? 1)) : 1 - frac(vv);
-        f = rl.mapVector === false ? sampleMapCubic(rl.map, uu, y) : sampleMapVector(rl.map, uu, y);
+        if (gp) f = geoHeight(gp, uu, y, cell, bevelOf(rl, cellMaxOf(d)));
+        else f = rl.mapVector === false ? sampleMapCubic(rl.map, uu, y) : sampleMapVector(rl.map, uu, y);
       } else {
         const p = patternById(rl.kind); if (!p) return 0;
-        setEdge(rl.edge ?? 0.15);
-        f = clamp(p.fn(uu, vv, rl.seed ?? 1), 0, 1);
+        if (gp?.hybrid) f = hybridHeight(gp, p.fn, rl.seed ?? 1, uu, vv, cell, bevelOf(rl, cellMaxOf(d)));
+        else if (gp) f = geoHeight(gp, uu, vv, cell, bevelOf(rl, cellMaxOf(d)));
+        else f = clamp(p.fn(uu, vv, rl.seed ?? 1), 0, 1);
       }
       if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1);
       if (rl.invert) f = 1 - f;
@@ -240,6 +246,28 @@ export function makeSurface(d: Design) {
     const a = th - tw * twistEase(d, t);
     const side = d.relief.side ?? 'outside';
     return Math.max(1, R * sectionMul(d, a) + (side !== 'inside' ? relief(d, t, a, R) : 0));
+  };
+}
+
+/** The face split into the plain shape and the relief offset (fast meshing: the relief is evaluated once
+ *  per point and reused for both the position and the edge tracing). face radius = plain ± relief. */
+export function surfaceParts(d: Design, face: 'outer' | 'inner') {
+  const pts = sortedProfile(d), Rmax = d.maxDiameter / 2, tw = (d.twist * Math.PI) / 180;
+  const side = d.relief.side ?? 'outside';
+  const on = d.relief.kind !== 'smooth' && d.relief.depth !== 0 && (face === 'outer' ? side !== 'inside' : side !== 'outside');
+  let lastT = NaN, lastR = 0, lastTw = 0;
+  const row = (z: number) => { const t = clamp(z / d.height, 0, 1); if (t !== lastT) { lastT = t; lastR = profileR(d, t, pts) * Rmax * (1 - d.narrowTop * t); lastTw = tw * twistEase(d, t); } return t; };
+  return {
+    on,
+    /** relief offset at (z, θ): + outward on the outer face, + into the cavity on the inner face */
+    rel: (z: number, th: number) => { if (!on) return 0; const t = row(z); return relief(d, t, th - lastTw, lastR); },
+    /** signed distances to the relief's sharp edges (mm), or null */
+    edges: (z: number, th: number) => { if (!on) return null; const t = row(z); return reliefEdges(d, t, th - lastTw, lastR); },
+    /** face radius given the relief offset */
+    radius: (z: number, th: number, rel: number) => {
+      row(z); const b = lastR * sectionMul(d, th - lastTw);
+      return face === 'outer' ? Math.max(1, b + rel) : Math.max(0.5, b - d.wall - rel);
+    },
   };
 }
 
@@ -331,4 +359,66 @@ export function meshGrid(d: Design, maxVerts = 600_000, quick = false) {
   if (k < 1) { cols = Math.max(96, Math.floor(cols * k)); rows = Math.max(40, Math.floor(rows * k)); }
   if (quick) { cols = Math.max(96, cols >> 1); rows = Math.max(40, rows >> 1); }
   return { rows, cols };
+}
+
+// ── exact pattern geometry (see patterngeo.ts)
+/** Bevel width in mm from the edge-softness setting: 0 → 0.25 mm (crisp), 1 → 1.75 mm; never over 30 % of a cell. */
+export const bevelOf = (rl: Relief, cellMax: number) => Math.min(cellMax * 0.3, 0.25 + 1.5 * (rl.edge ?? 0.15));
+const cellMaxOf = (d: Design) => (TAU * d.maxDiameter / 2) / Math.max(1, Math.round(d.relief.count));
+/** Sharp-pattern geometry for this relief, or null for smooth patterns / thumbnails. */
+let memo: { rl: Relief | null; kind: string; seed: number; edge: number; vec: boolean; map: unknown; maxD: number; n: number; g: Geo | null; minW: number } =
+  { rl: null, kind: '', seed: 0, edge: 0, vec: true, map: null, maxD: 0, n: 0, g: null, minW: 0 };
+function geoOf(d: Design, _cell: number, raw: boolean): Geo | null {
+  const rl = d.relief;
+  if (raw) return null;
+  // one geometry per piece: line widths are fixed from the widest cell, so every row shares it
+  const n = Math.max(1, Math.round(rl.count)), edge = rl.edge ?? 0.15, seed = rl.seed ?? 1, vec = rl.mapVector !== false;
+  const m = memo;
+  if (m.rl === rl && m.kind === rl.kind && m.seed === seed && m.edge === edge && m.vec === vec && m.map === rl.map && m.maxD === d.maxDiameter && m.n === n) {
+    if (rl.kind !== 'image') { setEdge(edge); setMinLine(m.minW); }
+    return m.g;
+  }
+  const cellMax = (TAU * d.maxDiameter / 2) / n, minW = 1.1 / Math.max(1, cellMax);
+  let g: Geo | null = null;
+  if (rl.kind === 'image') g = rl.map && vec ? mapGeo(rl.map) : null;
+  else {
+    // pattern lines at least ~1.6 mm wide on the real surface (4 nozzle widths): crisp to print and to mesh
+    setEdge(edge); setMinLine(minW);
+    const pg = patternGeo(rl.kind, seed, `${minW.toFixed(4)}|${edge}`);
+    g = pg && pg.sharp ? pg : null;
+  }
+  memo = { rl, kind: rl.kind, seed, edge, vec, map: rl.map, maxD: d.maxDiameter, n, g, minW };
+  return g;
+}
+/** Hybrid pattern: the formula's own height away from edges; across a jump edge a straight bevel between the
+ *  heights just inside and just outside it (sampled along the edge normal). */
+function hybridHeight(g: Geo, fn: (u: number, v: number, s: number) => number, seed: number, u: number, v: number, cell: number, bev: number) {
+  const lv = g.levels[0], sd = geoSd(g, lv, u, v), half = bev / 2 / cell;
+  if (Math.abs(sd) >= half) return clamp(fn(u, v, seed), 0, 1);
+  const e = 0.5 / 128, gx = geoSd(g, lv, u + e, v) - geoSd(g, lv, u - e, v), gy = geoSd(g, lv, u, v + e) - geoSd(g, lv, u, v - e), gl = Math.hypot(gx, gy) || 1;
+  const nx = gx / gl, ny = gy / gl, eps = 0.15 / 128;
+  const tin = sd + half + eps, tout = half - sd + eps;
+  const hIn = clamp(fn(u - nx * tin, v - ny * tin, seed), 0, 1), hOut = clamp(fn(u + nx * tout, v + ny * tout, seed), 0, 1);
+  const k = bevelH(sd * cell, bev);
+  return hOut + (hIn - hOut) * k;
+}
+function geoHeight(g: Geo, u: number, v: number, cell: number, bev: number) {
+  let f = g.base;
+  for (const lv of g.levels) f += lv.step * bevelH(geoSd(g, lv, u, v) * cell, bev);
+  return f;
+}
+/** Signed distances (mm) to every edge of a sharp relief at (t, θ), and the bevel width; null when the relief
+ *  has no sharp edges. The mesher snaps vertices onto sd = ±bevel/2. */
+export function reliefEdges(d: Design, t: number, th: number, R: number): { sd: number[]; bev: number } | null {
+  const rl = d.relief;
+  if (rl.kind === 'smooth' || rl.depth === 0) return null;
+  const tr = Math.max(1e-3, rl.transition);
+  if (clamp((t - rl.start) / tr, 0, 1) * clamp((rl.end - t) / tr, 0, 1) <= 0) return null;
+  const n = Math.max(1, Math.round(rl.count)), cell = (TAU * R) / n;
+  const gp = geoOf(d, cell, false); if (!gp) return null;
+  const u = (th / TAU) * n, v = cellRows(d, t, n);
+  const vv = v / Math.max(0.1, rl.aspect ?? 1);
+  const uu = u + vv * Math.tan(((rl.slant ?? 0) * Math.PI) / 180) + Math.floor(vv) * (rl.rowShift ?? 0);
+  const y = rl.kind !== 'image' ? vv : rl.mapMode === 'band' ? 1 - frac(clamp((t - rl.start) / Math.max(1e-3, rl.end - rl.start), 0, 0.9999) * Math.max(1, rl.tilesUp ?? 1)) : 1 - frac(vv);
+  return { sd: gp.levels.map((lv) => geoSd(gp, lv, uu, y) * cell), bev: bevelOf(rl, cellMaxOf(d)) };
 }
