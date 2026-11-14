@@ -48,7 +48,7 @@ export const COASTER_SHAPES: { id: string; name: string; section: SectionKind; s
 
 export const defaultCoaster = (): CoasterSet => ({
   shape: 'scallop', section: 'petal', sides: 14, depth: 0.08, diameter: 100, thickness: 4, count: 4, mode: 'deboss', border: 6,
-  caseOn: true, gap: 1, wall: 2.4, floor: 2, notch: 34,
+  caseOn: true, gap: 1, wall: 2.4, floor: 2, notch: 50,
 });
 
 /** Case height: floor + the stack + a little headroom. */
@@ -208,17 +208,22 @@ export function plateMesh(d: Design, step: number) {
 /** Case mesh at the origin: floor under the outer outline, wall ring with a finger notch at the front. */
 export function caseMesh(d: Design, step: number) {
   const c = d.coaster!, o = outline(c), R = o.R + c.gap + c.wall + 1;
-  const H = caseHeight(c), F = c.floor, nb = F + c.thickness;
-  const Rc = o.R + c.gap + c.wall / 2, half = c.notch > 0 ? c.notch / 2 / Rc : 0;
+  const H = caseHeight(c), F = c.floor;
+  // finger opening: a straight-sided slot down to the floor, with rounded top corners
+  const Rc = o.R + c.gap + c.wall / 2, halfW = c.notch / 2, rr = Math.min(4, halfW * 0.3, (H - F) * 0.5);
+  const sOf = (x: number, y: number) => { let dth = Math.atan2(y, x) + Math.PI / 2; dth = Math.atan2(Math.sin(dth), Math.cos(dth)); return Math.abs(dth) * Rc; };
   const wallH = (x: number, y: number) => {
-    if (!half) return H;
-    let dth = Math.atan2(y, x) + Math.PI / 2; dth = Math.atan2(Math.sin(dth), Math.cos(dth));
-    if (Math.abs(dth) >= half) return H;
-    return H - (H - nb) * (0.5 + 0.5 * Math.cos((Math.PI * dth) / half));
+    if (c.notch <= 0) return H;
+    const t = sOf(x, y) - halfW;                    // 0 at the slot side, rising over the corner radius
+    if (t >= rr) return H;
+    const k = Math.max(0, t);
+    return H - rr + Math.sqrt(Math.max(0, rr * rr - (rr - k) ** 2));
   };
   const outer = c.gap + c.wall;
   const floorM = prism({ x0: -R, y0: -R, size: 2 * R, step, nC: 1, evalC: (x, y, out, k) => { out[k] = o.sd(x, y) - outer; }, keep: (x, y) => o.sd(x, y) < outer, zTop: () => F, zBot: () => 0 });
-  const ringM = prism({ x0: -R, y0: -R, size: 2 * R, step, nC: 2, evalC: (x, y, out, k) => { const s = o.sd(x, y); out[k] = s - c.gap; out[k + 1] = s - outer; }, keep: (x, y) => { const s = o.sd(x, y); return s > c.gap && s < outer; }, zTop: wallH, zBot: () => F });
+  const ringM = prism({ x0: -R, y0: -R, size: 2 * R, step, nC: 3,
+    evalC: (x, y, out, k) => { const s = o.sd(x, y); out[k] = s - c.gap; out[k + 1] = s - outer; out[k + 2] = c.notch > 0 ? sOf(x, y) - halfW : 1; },
+    keep: (x, y) => { const s = o.sd(x, y); return s > c.gap && s < outer && !(c.notch > 0 && sOf(x, y) < halfW); }, zTop: wallH, zBot: () => F });
   return [floorM, ringM];
 }
 

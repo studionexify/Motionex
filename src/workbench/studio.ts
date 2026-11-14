@@ -538,7 +538,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
       c.caseOn ? row('Gap to plates', num(() => c.gap, (v) => (c.gap = v), 0.4, 3, 0.1, 'mm', ch), 'Clearance all round so plates lift out easily.') : null,
       c.caseOn ? row('Wall', num(() => c.wall, (v) => (c.wall = v), 1.2, 6, 0.1, 'mm', ch)) : null,
       c.caseOn ? row('Floor', num(() => c.floor, (v) => (c.floor = v), 1, 5, 0.1, 'mm', ch)) : null,
-      c.caseOn ? row('Finger notch', num(() => c.notch, (v) => (c.notch = v), 0, 80, 1, 'mm', ch), '0 = no notch.') : null,
+      c.caseOn ? row('Finger opening', num(() => c.notch, (v) => (c.notch = v), 0, Math.round(c.diameter * 0.8), 1, 'mm', ch), 'Open to the floor so the last coaster lifts out. 0 = none.') : null,
       c.caseOn ? h('p', { class: 'mxs-hint' }, `Case is ${caseHeight(c).toFixed(1)} mm tall: floor + ${c.count} × ${c.thickness} mm plates + 1.5 mm headroom.`) : null));
     right.append(group('Pattern', h('p', { class: 'mxs-hint mxs-keep' }, 'Pick any relief in the Relief tab, then choose Raised, Carved or Cut through. The Nets group has open patterns made for cut-through coasters.')));
   }
