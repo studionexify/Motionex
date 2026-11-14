@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { SlicerCamera, viewCube } from './camera';
 import { makeSurface, type Design } from './design';
 import { buildMesh, meshToStl, type BuiltMesh } from './meshbuild';
+import { ghosts } from './fitting';
+import { partSize } from './stand';
 import type { GenResult } from './generator';
 import { DEFECT, type PrintSim } from './physics';
 
@@ -153,7 +155,9 @@ export class StudioView {
     const colourOnly = this.baseColor.getHexString() !== new THREE.Color(color).getHexString();
     this.baseColor.set(color);
     const firstFrame = this.gridSize === 0;
-    this.height = d.height; this.gridSize = d.maxDiameter; this.buildGrid();
+    const size = partSize(d);
+    this.height = size.height; this.gridSize = size.diameter; this.buildGrid();
+    this.buildGhosts(d);
     if (firstFrame) this.fit();
     const key = JSON.stringify({ ...d, name: '' });
     if (key === this.shapeKey && this.built) {
@@ -192,6 +196,25 @@ export class StudioView {
     if (job.seq < this.lastApplied) return;                          // something newer is already shown
     this.lastApplied = job.seq; this.builtQ = job.q; this.viewKey = job.q === 'view' ? job.key : '';
     this.applyMesh(m);
+  }
+  /** Lamp holder and bulb, see-through and never printed: shows that the chosen bulb really fits. */
+  private ghost: THREE.Group | null = null;
+  private ghostKey = '';
+  private buildGhosts(d: Design) {
+    const parts = ghosts(d), key = JSON.stringify(parts);
+    if (key === this.ghostKey) return;
+    this.ghostKey = key;
+    if (this.ghost) { this.scene.remove(this.ghost); this.ghost.traverse((o) => { const m = o as THREE.Mesh; if (m.geometry) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); } }); this.ghost = null; }
+    if (!parts.length) return;
+    this.ghost = new THREE.Group();
+    for (const p of parts) {
+      // lathe turns around Y: build it with the piece's z as Y, then stand it up on Z
+      const pts = p.profile.map(([r, z]) => new THREE.Vector2(r, z));
+      const geo = new THREE.LatheGeometry(pts, 48); geo.rotateX(Math.PI / 2);
+      this.ghost.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: p.color, transparent: true, opacity: p.name === 'bulb' ? 0.55 : 0.8, side: THREE.DoubleSide, depthWrite: false })));
+    }
+    this.ghost.visible = this.showModel && !this.showToolpath;
+    this.scene.add(this.ghost);
   }
   /** STL at export quality (in the background when possible). */
   exportStl(d: Design): Promise<ArrayBuffer> {
@@ -432,6 +455,7 @@ export class StudioView {
   setVisibility(model: boolean, toolpath: boolean) {
     this.showModel = model; this.showToolpath = toolpath;
     if (this.mesh) { this.mesh.visible = model; const mt = this.mesh.material as THREE.MeshLambertMaterial; mt.transparent = model && toolpath; mt.opacity = model && toolpath ? 0.22 : 1; mt.depthWrite = !(model && toolpath); mt.needsUpdate = true; }
+    if (this.ghost) this.ghost.visible = model && !toolpath;
     if (this.lines) this.lines.visible = toolpath;
     if (this.beads) this.beads.visible = toolpath;
     this.draw();

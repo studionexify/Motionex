@@ -1,5 +1,8 @@
-# Publishes the web version of NexSpiro to GitHub Pages.
-# One-time setup: repository Settings → Pages → Build and deployment → Source: "GitHub Actions".
+# Publishes the Motionex web app (the same build as Cloudflare Pages, see WEB-DEPLOY.md) to GitHub Pages.
+# One-time setup, by a repository admin: Settings → Pages → Build and deployment → Source: "GitHub Actions".
+# The workflow's token cannot switch Pages on by itself; until it is on, the deploy step fails with
+# "Get Pages site failed: Not Found".
+# GitHub Pages sites of a public repository are public: Cloudflare Access and web/public/_headers do not apply here.
 name: Web app (GitHub Pages)
 
 on:
@@ -35,12 +38,13 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       # tests already run on every push to main in ci.yml
-      - run: npm run build
+      # the web app (plus the printer bridge download); relative paths, since Pages serves it under /<repo>/
+      - run: npm run build:bridge
+      - run: npx vite build -c vite.web.config.ts --base ./
+      - run: cp dist-bridge/motionex-bridge.cjs dist-web/motionex-bridge.cjs
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: dist-web
       - id: deployment
         uses: actions/deploy-pages@v4

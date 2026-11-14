@@ -5,6 +5,8 @@ import { effectPhase } from '../plugins/motionex/modifier';
 import type { LayerEffect, MotionBrush } from '../plugins/motionex/model';
 import { makeInner, makeSurface, profileR, type Design } from './design';
 import { prepareRules, ruleWeight, type PreparedRule, type Rule } from './rules';
+import { isStandPart, requiredFlip, seatOf } from './fitting';
+import { sliceStand } from './stand';
 
 /** One band of layers with its own motion (motion "layer-wise"). Zones are checked top of list first. */
 export interface MotionZone {
@@ -105,7 +107,11 @@ function inset(pts: [number, number][], d: number): [number, number][] {
   return pts.map(([x, y]) => { const r = Math.hypot(x, y) || 1; const k = Math.max(0, (r - d) / r); return [x * k, y * k]; });
 }
 
-export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], brushes: (id: string) => MotionBrush | undefined, rules: Rule[] = []): GenResult {
+export function slice(design: Design, s00: SliceSettings, zones: MotionZone[], brushes: (id: string) => MotionBrush | undefined, rules: Rule[] = []): GenResult {
+  if (isStandPart(design)) return sliceStand(design, s00);
+  // A lamp holder seat is always laid on the bed: pendants print upside down, table shades upright.
+  const needFlip = requiredFlip(design);
+  const s0: SliceSettings = needFlip === null || needFlip === s00.flip ? s00 : { ...s00, flip: needFlip };
   // Keep every setting within what the nozzle can print (a 1 mm nozzle cannot lay a 5 mm bead).
   const NZ = nozzleLimits(s0.nozzle ?? 0.4, s0.printer);
   const clampN = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -229,7 +235,12 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
   };
 
   const isBaseLayer = (li: number) => li < baseOn;
-  const baseOn = !design.openBottom && !s.flip ? s.baseLayers : design.openBottom ? 0 : s.baseLayers;
+  // the seat plate (print z 0..thickness) replaces the solid base
+  const seat = seatOf(design), seatT = seat ? seat.z1 - seat.z0 : 0;
+  const isSeatLayer = (li: number) => !!seat && (li === 0 ? flh : flh + li * lh) <= Math.max(flh, seatT) + 1e-6;
+  let seatLayers = 0; while (seat && seatLayers < nLayers && isSeatLayer(seatLayers)) seatLayers++;
+  const baseOn = seat ? 0 : !design.openBottom && !s.flip ? s.baseLayers : design.openBottom ? 0 : s.baseLayers;
+  if (seat && needFlip !== s00.flip) warnings.push(seat.top ? 'Printed upside down so the lamp holder seat lies on the bed.' : 'Printed upright so the lamp holder seat lies on the bed.');
   for (let li = 0; li < nLayers; li++) {
     const zTop = li === 0 ? flh : Math.min(H, flh + li * lh);
     const h = li === 0 ? flh : lh;
@@ -262,7 +273,8 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
     if (li === 1) emit(`M106 S${Math.round((s.fan / 100) * 255)}`);
     const isTop = !isBaseLayer(li) && s.topLayers > 0 && li >= nLayers - s.topLayers && !s.flip;
     const isBase = li < baseOn || isTop;
-    const spiralNow = s.spiral && walls === 1 && !isBase && li > 0;
+    const isSeat = li < seatLayers;
+    const spiralNow = s.spiral && walls === 1 && !isBase && !isSeat && li > 0;
     const t = zTop / H;
 
     // walls: N lines from the outer surface to the inner surface (wall thickness / line width)
@@ -287,7 +299,7 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
         const zf = zone.from * H, zt = zone.to * H;
         fade = zone.fade > 0 ? Math.min(1, (zTop - zf) / zone.fade + (zf <= flh ? 1 : 0), (zt - zTop) / zone.fade + (zt >= H - 1e-6 ? 1 : 0)) : 1;
         fade = Math.max(0, Math.min(1, fade));
-        if (li < Math.max(1, baseOn)) fade = 0; // never on the base / first layer
+        if (li < Math.max(1, baseOn, seatLayers)) fade = 0; // never on the base / seat / first layer
         phase = ((brush.phase_deg ?? 0) + zone.phase + lp) / 360;
         if (effect?.cross && li % 2) phase = ((brush.phase_deg ?? 0) + zone.phase - lp) / 360;
       }
@@ -321,7 +333,7 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
           moving = true;
         }
         curRuled = false; curRule = -1;
-        if (prep.length && li >= Math.max(1, baseOn)) {
+        if (prep.length && li >= Math.max(1, baseOn, seatLayers)) {
           const ax = p[0] - pp[0], ay = p[1] - pp[1], bx = pn[0] - p[0], by = pn[1] - p[1];
           const turn = Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by)) / Math.max(1e-6, (Math.hypot(ax, ay) + Math.hypot(bx, by)) / 2);
           const q = ruleAt(lk, frac(Math.atan2(p[1], p[0]) / TAU), Math.hypot(p[0], p[1]), turn > 1 / 150, k);
@@ -373,6 +385,31 @@ export function slice(design: Design, s0: SliceSettings, zones: MotionZone[], br
         curRuled = false; curRule = -1;
       }
     }
+
+    // lamp holder seat: solid rings from the wall in to a clean round hole
+    if (isSeat && seat) {
+      const lw = s.lineWidth, N = 360, rIn = seat.holeR + lw / 2;
+      const wallIn = wallLoop(zTop, N, walls - 1).map(([px, py]) => Math.hypot(px, py) - lw);
+      let span = 0; for (const r of wallIn) span = Math.max(span, r - rIn);
+      if (span > -lw / 2) {
+        const rings = Math.max(1, Math.ceil(span / lw - 1e-6));
+        for (let j = rings; j >= 0; j--) {
+          const rAt = (i: number) => Math.max(rIn, rIn + (wallIn[i % N] - rIn) * (j / rings));
+          travel(cx + rAt(0), cy, zTop);
+          for (let i = 1; i <= N; i++) {
+            const th = (i / N) * TAU, r = rAt(i);
+            // rings sit closer together where the opening is narrower: thin the bead to match
+            const gap = Math.max(0, wallIn[i % N] - rIn) / rings;
+            extrude(cx + r * Math.cos(th), cy + r * Math.sin(th), zTop, h, lw, speed, j === 0 ? 1 : Math.min(1, Math.max(0.2, gap / lw)), 'base');
+          }
+        }
+      }
+    }
+  }
+  if (seat) {
+    let have = Infinity; const zc = s.flip ? H - (seat.z0 + seat.z1) / 2 : (seat.z0 + seat.z1) / 2;
+    for (let j = 0; j < 72; j++) have = Math.min(have, inner(zc, (j / 72) * TAU));
+    if (have < seat.holeR + s.lineWidth * 1.5) warnings.push(`The opening is too small for the Ø${(seat.holeR * 2).toFixed(1)} mm lamp holder hole: no seat could be printed. Widen it in Design › Lamp fitting.`);
   }
   emit(`; filament used: ${(eTot / 1000).toFixed(3)} m`);
   for (const l of s.endGcode.replace('{bedY_minus10}', String(s.bedY - 10)).split('\n')) emit(l);
