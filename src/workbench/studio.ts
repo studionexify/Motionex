@@ -542,7 +542,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     right.append(group('Plates',
       row('Size', num(() => c.diameter, (v) => (c.diameter = v), 60, 160, 1, 'mm', ch), 'Across the corners.'),
       row('Thickness', num(() => c.thickness, (v) => (c.thickness = v), 2, 10, 0.2, 'mm', ch)),
-      row('How many', num(() => c.count, (v) => (c.count = Math.round(v)), 1, 12, 1, '', ch))));
+      row('How many', num(() => c.count, (v) => (c.count = Math.round(v)), 1, 12, 1, '', ch)),
+      row('Edge', seg<'none' | 'chamfer' | 'fillet'>([['none', 'Square'], ['chamfer', 'Chamfer'], ['fillet', 'Fillet']], () => c.edge ?? 'none', (v) => { c.edge = v; ch(); renderPanel(); })),
+      (c.edge ?? 'none') !== 'none' ? row('Edge size', num(() => c.edgeSize ?? 1, (v) => (c.edgeSize = v), 0.2, 3, 0.1, 'mm', ch), 'Kept inside the plain border and the plate thickness.') : null,
+      (c.edge ?? 'none') !== 'none' ? row('Bottom edge too', toggle(() => !!c.edgeBottom, (v) => (c.edgeBottom = v), ch)) : null));
     right.append(group('Case',
       row('Make a case', toggle(() => c.caseOn, (v) => (c.caseOn = v), () => { ch(); renderPanel(); })),
       c.caseOn ? row('Gap to plates', num(() => c.gap, (v) => (c.gap = v), 0.4, 3, 0.1, 'mm', ch), 'Clearance all round so plates lift out easily.') : null,
@@ -1315,7 +1318,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const el = h('div', { class: 'mxs-profwrap' }, c, h('div', { class: 'mxs-pnums' }, h('label', {}, 'Ø'), rIn, h('label', {}, 'height'), zIn, h('span', { class: 'mxs-unit' }, 'mm')));
     let sel = 0, drag = false;
     const pad = 22, maxR = () => D().maxDiameter / 2;
-    const box = () => { const s = Math.min((W - 2 * pad) / (maxR() * 1.15), (Hh - 2 * pad) / D().height); return { s, ox: W / 2 - 6, oy: Hh - pad }; };
+    const box = () => { const s = Math.min((W / 2 - pad + 6) / (maxR() * 1.15), (Hh - 2 * pad) / D().height); return { s, ox: W / 2 - 6, oy: Hh - pad }; };
     const nk = (t: number) => 1 - D().narrowTop * t;   // points are drawn where the curve really is (after narrowing)
     const toPx = (p: ProfilePoint) => { const { s, ox, oy } = box(); return [ox + p.r * nk(p.t) * maxR() * s, oy - p.t * D().height * s]; };
     const fromPx = (x: number, y: number): ProfilePoint => { const { s, ox, oy } = box(); const t = Math.max(0, Math.min(1, (oy - y) / s / D().height)); return { r: Math.max(0.02, Math.min(1.15, (x - ox) / s / maxR() / Math.max(0.05, nk(t)))), t }; };

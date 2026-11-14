@@ -184,6 +184,19 @@ export const PATTERNS: Pattern[] = [
     ['netcross', 'Cross mesh', 10, 1, (u, v) => { const [x, y] = local(u, v); const ax = Math.abs(x), ay = Math.abs(y); return (ax < 0.4 && ay < 0.12) || (ay < 0.4 && ax < 0.12) ? 1 : 0; }],
     ['netwave', 'Wave mesh', 10, 1, (u, v) => { const y = fr(v + 0.12 * Math.sin(u * TAU)) - 0.5, x = fr(u + 0.12 * Math.sin(v * TAU)) - 0.5; return 1 - ss(0.34, 0.38, Math.max(Math.abs(x), Math.abs(y))); }],
   ]),
+  // Geometric tiles for coasters: 1 = feature / opening, 0 = a web that stays joined in every cell (no islands)
+  ...P('Geometric', [
+    ['geostar', 'Eight-point stars', 8, 1, (u, v) => { const [x, y] = local(u, v); const a = Math.max(Math.abs(x), Math.abs(y)), b = (Math.abs(x) + Math.abs(y)) / Math.SQRT2; return 1 - ss(0.27, 0.31, Math.max(a, b)); }],
+    ['geoquatre', 'Quatrefoils', 8, 1, (u, v) => { const [x, y] = local(u, v); const r = Math.min(circ(x - 0.14, y), circ(x + 0.14, y), circ(x, y - 0.14), circ(x, y + 0.14)); return 1 - ss(0.17, 0.21, r); }],
+    ['geocubes', 'Tumbling blocks', 8, 1, (u, v) => { const hx = hex(u, v), a = Math.atan2(hx.dy, hx.dx); let k = 1; for (const t of [Math.PI / 2, (7 * Math.PI) / 6, (11 * Math.PI) / 6]) { const px = Math.cos(t), py = Math.sin(t), along = hx.dx * px + hx.dy * py, across = Math.abs(hx.dx * py - hx.dy * px); if (along > 0) k = Math.min(k, ss(0.04, 0.08, across)); } void a; return Math.min(k, 1 - ss(0.38, 0.42, hx.hd)); }],
+    ['geoflower', 'Flower of life', 6, 1, (u, v) => { const r3 = Math.sqrt(3); let d = 9; for (let i = -1; i <= 2; i++) for (let j = -1; j <= 2; j++) { const cy = Math.floor(v / r3) * r3 + j * r3 / 2, cx = Math.floor(u) + i + (((Math.floor(v / r3) * 2 + j) % 2 + 2) % 2) * 0.5; d = Math.min(d, Math.abs(circ(u - cx, v - cy) - 1)); } return ss(0.05, 0.09, d); }],
+    ['geosquares', 'Nested squares', 8, 1, (u, v) => { const [x, y] = local(u, v); const sq = Math.max(Math.abs(x), Math.abs(y)); const ring = line(fr(sq * 4) - 0.5, 0.5) > 0.5 && sq < 0.44; const spoke = Math.min(Math.abs(x), Math.abs(y)) < 0.05; return ring && !spoke ? 1 : 0; }],
+    ['geochevron', 'Chevron slots', 8, 1, (u, v) => { const row = Math.floor(v * 2); const x = fr(u) - 0.5, y = fr(v * 2) - 0.5 - (Math.abs(x) - 0.25) * 0.8; return Math.abs(y) < 0.18 && Math.abs(x) < 0.44 ? 1 : 0 * row; }],
+    ['geopinwheel', 'Pinwheels', 8, 1, (u, v) => { const [x, y] = local(u, v); const q = (x > 0 ? 1 : 0) + (y > 0 ? 2 : 0), ax = Math.abs(x), ay = Math.abs(y); const inTri = q === 0 || q === 3 ? ax > ay + 0.06 : ay > ax + 0.06; return inTri && ax > 0.05 && ay > 0.05 && ax < 0.44 && ay < 0.44 ? 1 : 0; }],
+    ['geolattice', 'Diamond lattice', 8, 1, (u, v) => { const x = fr(u + v) - 0.5, y = fr(u - v) - 0.5; return 1 - ss(0.36, 0.40, Math.max(Math.abs(x), Math.abs(y))); }],
+    ['geoogee', 'Ogee', 6, 1, (u, v) => { const x = fr(u) - 0.5, y = fr(v); const w = 0.4 * Math.cos(Math.PI * (y - 0.5)) * (y < 0.5 ? 1 : 1); const ogee = Math.abs(x) < w * Math.sin(Math.PI * y) + 0.02; return ogee && y > 0.06 && y < 0.94 ? 1 : 0; }],
+    ['geotri', 'Triangle tiles', 8, 1, (u, v) => { const r3 = Math.sqrt(3), y = fr(v / (r3 / 2)), row = Math.floor(v / (r3 / 2)), x = fr(u + (row % 2) * 0.5); const up = Math.abs(x - 0.5) * 2 < y, a = up ? Math.min(y - Math.abs(x - 0.5) * 2, 1 - y) : Math.min(Math.abs(x - 0.5) * 2 - y, y); return ss(0.07, 0.11, a * r3 / 2); }],
+  ]),
   ...P('Textiles', [
     ['tartan', 'Tartan', 6, 0.8, (u, v) => { const f = (t: number) => (fr(t) < 0.15 ? 1 : fr(t) < 0.2 ? 0.2 : fr(t) > 0.6 && fr(t) < 0.65 ? 0.8 : 0.4); return (f(u) + f(v)) / 2; }],
     ['houndstooth', 'Houndstooth', 14, 0.8, (u, v) => { const x = fr(u) * 4, y = fr(v) * 4; const xi = Math.floor(x), yi = Math.floor(y); const base = (xi < 2) === (yi < 2); const tooth = (xi === 2 && yi === 1 && fr(x) > fr(y)) || (xi === 1 && yi === 2 && fr(x) < fr(y)) || (xi === 0 && yi === 3) || (xi === 3 && yi === 0); return base !== tooth ? 1 : 0; }],

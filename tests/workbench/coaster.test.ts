@@ -27,4 +27,21 @@ describe('coasters', () => {
         expect(hi - lo, `${r.id} ${mode}`).toBeGreaterThan(0.3);
       }
   });
+  it('fillet and chamfer edges stay watertight, top and bottom', () => {
+    for (const edge of ['chamfer', 'fillet'] as const) {
+      const d = defaultDesign('coaster'); Object.assign(d.coaster!, { edge, edgeSize: 1.2, edgeBottom: true });
+      const m = plateMesh(d, 0.8); expect(openEdges(m), edge).toBe(0);
+      let zmin = 99; for (let i = 2; i < m.pos.length; i += 3) zmin = Math.min(zmin, m.pos[i]);
+      expect(zmin).toBe(0);
+    }
+  });
+  it('cut-through plates print as one piece (waffle keeps its grid)', () => {
+    for (const kind of ['waffle', 'crosshatch', 'geocubes']) {
+      const d = defaultDesign('coaster'); d.relief = { ...d.relief, kind, count: 8, depth: 1 }; d.coaster!.mode = 'through';
+      const m = plateMesh(d, 1); const par = new Map<number, number>(); const f = (a: number): number => { const p = par.get(a) ?? a; if (p === a) return a; const r = f(p); par.set(a, r); return r; };
+      for (let t = 0; t < m.idx.length; t += 3) { const a = f(m.idx[t]); par.set(f(m.idx[t + 1]), a); par.set(f(m.idx[t + 2]), a); }
+      const roots = new Set<number>(); for (const i of m.idx) roots.add(f(i));
+      expect(roots.size, kind).toBe(1);
+    }
+  });
 });

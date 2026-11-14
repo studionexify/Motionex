@@ -18,6 +18,9 @@ export interface CoasterSet {
   wall: number;             // case wall, mm
   floor: number;            // case floor, mm
   notch: number;            // finger notch width, mm (0 = none)
+  edge?: 'none' | 'chamfer' | 'fillet';   // plate edge profile
+  edgeSize?: number;        // mm
+  edgeBottom?: boolean;     // profile the bottom edge too
 }
 
 /** Basic plate outlines (top view). Each maps onto the section engine, so every shape is exact. */
@@ -48,7 +51,7 @@ export const COASTER_SHAPES: { id: string; name: string; section: SectionKind; s
 
 export const defaultCoaster = (): CoasterSet => ({
   shape: 'scallop', section: 'petal', sides: 14, depth: 0.08, diameter: 100, thickness: 4, count: 4, mode: 'deboss', border: 6,
-  caseOn: true, gap: 1, wall: 2.4, floor: 2, notch: 50,
+  caseOn: true, gap: 1, wall: 2.4, floor: 2, notch: 50, edge: 'none', edgeSize: 1, edgeBottom: false,
 });
 
 /** Case height: floor + the stack + a little headroom. */
@@ -238,26 +241,86 @@ export function plateMesh(d: Design, step: number) {
   // pattern coordinates kept positive (whole tiles shifted) so no seam runs along the centre lines
   const U = (m: number) => m / cell + 840 + planarTileFor(Math.round(rl.count)) / 2;
   const smoothCut = through && !!pat;                         // cut-through: cut exactly on the contour the holes follow
+  const T = c.thickness;
+  // edge profile: chamfer or fillet of size e on the top (and bottom) rim of the plate
+  const ek = c.edge && c.edge !== 'none' ? c.edge : null;
+  const e = ek ? Math.max(0.1, Math.min(c.edgeSize ?? 1, T * (c.edgeBottom ? 0.45 : 0.8), reliefOn ? Math.max(0.2, c.border - 0.3) : 99)) : 0;
+  // fillet: rings of exact vertices along the curve, spaced no closer than the mesh grid (no crowded cells)
+  const nF = ek === 'fillet' ? Math.max(1, Math.min(5, Math.floor(e / (step * 0.9)))) : 1;
+  const eIsos = !ek ? [] : Array.from({ length: nF }, (_, i) => (i + 1) / nF);
+  const rim = (dist: number) => { if (dist >= e) return 0; const t = e - Math.max(0, dist); return ek === 'chamfer' ? t : e - Math.sqrt(Math.max(0, e * e - t * t)); };
   const isos = through ? [0] : [-bev / 2, bev / 2];
-  const nC = 1 + (reliefOn ? (through ? 1 : 2) : 0) + L * isos.length + (smoothCut ? 1 : 0);
+  const nC = 1 + (reliefOn ? (through ? 1 : 2) : 0) + L * isos.length + (smoothCut ? 1 : 0) + eIsos.length;
   const evalC = (x: number, y: number, out: Float32Array, k: number) => {
     const sd = o.sd(x, y);
     out[k] = sd;
     let q = k + 1;
     if (reliefOn) { if (through) out[q++] = sd + c.border; else { out[q++] = sd + c.border - bev / 2; out[q++] = sd + c.border + bev / 2; } }
-    if (L) { const e = pat!.edges(U(x), U(y))!; for (let l = 0; l < L; l++) for (const iso of isos) out[q++] = e[l] - iso; }
+    if (L) { const ed = pat!.edges(U(x), U(y))!; for (let l = 0; l < L; l++) for (const iso of isos) out[q++] = ed[l] - iso; }
     if (smoothCut) out[q++] = pat!.height(U(x), U(y)) - 0.5;
+    for (const f of eIsos) out[q++] = sd + e * f;
   };
   const inner = (x: number, y: number) => through ? (o.sd(x, y) < -c.border ? 1 : 0) : Math.min(1, Math.max(0, (-o.sd(x, y) - c.border) / bev + 0.5));
-  const T = c.thickness, dep = Math.min(rl.depth, through ? T : c.mode === 'deboss' ? T - 0.8 : 6);
+  const dep = Math.min(Math.abs(rl.depth), through ? T : c.mode === 'deboss' ? T - 0.8 : 6);
   const zTop = (x: number, y: number) => {
-    if (!pat || through) return T;
-    const k = inner(x, y); if (k <= 0) return T;
+    const edgeDrop = e ? rim(-o.sd(x, y)) : 0;
+    if (!pat || through) return T - edgeDrop;
+    const k = inner(x, y); if (k <= 0) return T - edgeDrop;
     const h = pat.height(U(x), U(y)) * k;
     return c.mode === 'emboss' ? T + dep * h : T - dep * h;
   };
-  const keep = (x: number, y: number) => o.sd(x, y) < 0 && !(through && pat && inner(x, y) > 0.5 && pat.height(U(x), U(y)) > 0.5);
-  return prism({ x0: -R - 1, y0: -R - 1, size: 2 * R + 2, step, nC, evalC, keep, zTop, zBot: () => 0 });
+  const zBot = (x: number, y: number) => (e && c.edgeBottom ? rim(-o.sd(x, y)) : 0);
+
+  // Cut-through must print as one piece: cut the side of the pattern that leaves the web joined to the rim,
+  // then drop any piece that still floats (it would fall out of the print).
+  let flip = false, floatAt: ((x: number, y: number) => boolean) | null = null;
+  if (through && pat) {
+    const px = 0.25, x0 = -R - 1, n = Math.ceil((2 * R + 2) / px), N2 = n * n;
+    const st = new Uint8Array(N2);           // 0 outside, 1 rim, 2 pattern high, 3 pattern low
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const x = x0 + (j + 0.5) * px, y = x0 + (i + 0.5) * px, sd = o.sd(x, y);
+      st[i * n + j] = sd >= 0 ? 0 : sd >= -c.border ? 1 : pat.height(U(x), U(y)) > 0.5 ? 2 : 3;
+    }
+    const solve = (holeCode: number) => {
+      const reach = new Uint8Array(N2), stack: number[] = [];
+      for (let k = 0; k < N2; k++) if (st[k] === 1) { reach[k] = 1; stack.push(k); }
+      while (stack.length) {
+        const k = stack.pop()!, i = (k / n) | 0, j = k - i * n;
+        for (const m of [j > 0 ? k - 1 : -1, j < n - 1 ? k + 1 : -1, i > 0 ? k - n : -1, i < n - 1 ? k + n : -1])
+          if (m >= 0 && !reach[m] && st[m] !== 0 && st[m] !== holeCode) { reach[m] = 1; stack.push(m); }
+      }
+      let lost = 0; for (let k = 0; k < N2; k++) if (st[k] !== 0 && st[k] !== holeCode && !reach[k]) lost++;
+      return { reach, lost };
+    };
+    const A = solve(2), B = solve(3);
+    flip = B.lost < A.lost * 0.5;            // cut the low parts only when that clearly floats less
+    const res = flip ? B : A, hole = flip ? 3 : 2;
+    if (res.lost) floatAt = (x, y) => {
+      const j0 = Math.floor((x - x0) / px), i0 = Math.floor((y - x0) / px);
+      for (let r = 0; r <= 2; r++) for (let i = i0 - r; i <= i0 + r; i++) for (let j = j0 - r; j <= j0 + r; j++) {
+        if (i < 0 || j < 0 || i >= n || j >= n) continue;
+        const k = i * n + j; if (st[k] !== 0 && st[k] !== hole) return !res.reach[k];
+      }
+      return false;
+    };
+  }
+  const isHole = (x: number, y: number) => { const hi = pat!.height(U(x), U(y)) > 0.5; return flip ? !hi : hi; };
+  const keep = (x: number, y: number) => o.sd(x, y) < 0 && !(through && pat && inner(x, y) > 0.5 && (isHole(x, y) || (floatAt !== null && floatAt(x, y))));
+  const m = prism({ x0: -R - 1, y0: -R - 1, size: 2 * R + 2, step, nC, evalC, keep, zTop, zBot });
+  return through ? mainPiece(m) : m;
+}
+
+/** Keep only the largest connected piece (anything else would print loose). */
+function mainPiece(m: { pos: number[]; idx: number[] }) {
+  const n = m.pos.length / 3, par = new Int32Array(n); for (let i = 0; i < n; i++) par[i] = i;
+  const f = (a: number): number => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+  for (let t = 0; t < m.idx.length; t += 3) { const a = f(m.idx[t]); par[f(m.idx[t + 1])] = a; par[f(m.idx[t + 2])] = a; }
+  const area = new Map<number, number>();
+  for (let t = 0; t < m.idx.length; t += 3) { const r = f(m.idx[t]); area.set(r, (area.get(r) ?? 0) + 1); }
+  if (area.size <= 1) return m;
+  let best = -1, bc = -1; for (const [r, c] of area) if (c > bc) { bc = c; best = r; }
+  const idx: number[] = []; for (let t = 0; t < m.idx.length; t += 3) if (f(m.idx[t]) === best) idx.push(m.idx[t], m.idx[t + 1], m.idx[t + 2]);
+  return { pos: m.pos, idx };
 }
 
 /** Case mesh at the origin: floor under the outer outline, wall ring with a finger notch at the front. */
