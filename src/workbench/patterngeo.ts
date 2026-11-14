@@ -88,14 +88,15 @@ const geoCache = new Map<string, Geo>();
 const mapCache = new WeakMap<HeightMap, Geo>();
 
 /** Geometry of a library pattern (cached per pattern, seed and minimum line width). */
-export function patternGeo(id: string, seed: number, key: string): Geo | null {
-  const ck = `${id}|${seed}|${key}`;
+export function patternGeo(id: string, seed: number, key: string, tile = TILE): Geo | null {
+  const ck = `${id}|${seed}|${key}|${tile}`;
   let g = geoCache.get(ck);
   if (g) return g;
   const p = PATTERNS.find((x) => x.id === id); if (!p) return null;
-  const W = TILE * RES, H = TILE * RES, vals = new Float32Array(W * H);
-  for (let y = 0; y < H; y++) { const vv = (y + 0.5) / RES; for (let x = 0; x < W; x++) vals[y * W + x] = p.fn((x + 0.5) / RES, vv, seed); }
-  g = build(vals, W, H, RES, TILE, TILE, false, (x, y) => p.fn(x / RES, y / RES, seed));
+  // a bigger tile (flat pieces wider than 10 cells) keeps the same sample count: fewer samples per cell
+  const res = Math.round((RES * TILE) / tile), W = tile * res, H = tile * res, vals = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) { const vv = (y + 0.5) / res; for (let x = 0; x < W; x++) vals[y * W + x] = p.fn((x + 0.5) / res, vv, seed); }
+  g = build(vals, W, H, res, tile, tile, false, (x, y) => p.fn(x / res, y / res, seed));
   if (geoCache.size > 6) geoCache.delete(geoCache.keys().next().value!);
   geoCache.set(ck, g);
   return g;

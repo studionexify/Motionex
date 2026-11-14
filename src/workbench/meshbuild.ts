@@ -65,7 +65,8 @@ function buildCoaster(d: Design, q: MeshQuality): BuiltMesh {
   const c = d.coaster!;
   const step = q === 'quick' ? 1.2 : q === 'view' ? 0.6 : 0.22;   // contours are cut exactly at any step
   const parts: { pos: number[]; idx: number[]; dx: number; dy: number }[] = [];
-  const plate = plateMesh(d, step), R = c.diameter / 2, Rc = R + c.gap + c.wall;
+  // cut-through holes have only their outline to show: mesh the plate finer so curves stay smooth
+  const plate = plateMesh(d, c.mode === 'through' && q !== 'export' ? step * 0.55 : step), R = c.diameter / 2, Rc = R + c.gap + c.wall;
   if (c.caseOn) for (const m of caseMesh(d, step)) parts.push({ ...m, dx: 0, dy: 0 });
   const startX = c.caseOn ? Rc + R + 12 : 0;
   const n = q === 'export' ? c.count : 1, perRow = Math.max(1, Math.ceil(Math.sqrt(n)));

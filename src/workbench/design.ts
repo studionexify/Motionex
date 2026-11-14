@@ -375,15 +375,17 @@ export function meshGrid(d: Design, maxVerts = 600_000, quick = false) {
 export const bevelOf = (rl: Relief, cellMax: number) => Math.min(cellMax * 0.3, 0.25 + 1.5 * (rl.edge ?? 0.15));
 const cellMaxOf = (d: Design) => (TAU * d.maxDiameter / 2) / Math.max(1, Math.round(d.relief.count));
 /** Sharp-pattern geometry for this relief, or null for smooth patterns / thumbnails. */
-let memo: { rl: Relief | null; kind: string; seed: number; edge: number; vec: boolean; map: unknown; maxD: number; n: number; g: Geo | null; minW: number } =
-  { rl: null, kind: '', seed: 0, edge: 0, vec: true, map: null, maxD: 0, n: 0, g: null, minW: 0 };
+/** Flat pieces: the pattern tile must cover the whole piece (no wrap seam). 0 = wrapped pieces. */
+let planarTile = 0;
+let memo: { tile: number; rl: Relief | null; kind: string; seed: number; edge: number; vec: boolean; map: unknown; maxD: number; n: number; g: Geo | null; minW: number } =
+  { tile: 0, rl: null, kind: '', seed: 0, edge: 0, vec: true, map: null, maxD: 0, n: 0, g: null, minW: 0 };
 function geoOf(d: Design, _cell: number, raw: boolean): Geo | null {
   const rl = d.relief;
   if (raw) return null;
   // one geometry per piece: line widths are fixed from the widest cell, so every row shares it
   const n = Math.max(1, Math.round(rl.count)), edge = rl.edge ?? 0.15, seed = rl.seed ?? 1, vec = rl.mapVector !== false;
   const m = memo;
-  if (m.rl === rl && m.kind === rl.kind && m.seed === seed && m.edge === edge && m.vec === vec && m.map === rl.map && m.maxD === d.maxDiameter && m.n === n) {
+  if (m.tile === planarTile && m.rl === rl && m.kind === rl.kind && m.seed === seed && m.edge === edge && m.vec === vec && m.map === rl.map && m.maxD === d.maxDiameter && m.n === n) {
     if (rl.kind !== 'image') { setEdge(edge); setMinLine(m.minW); }
     return m.g;
   }
@@ -393,10 +395,10 @@ function geoOf(d: Design, _cell: number, raw: boolean): Geo | null {
   else {
     // pattern lines at least ~1.6 mm wide on the real surface (4 nozzle widths): crisp to print and to mesh
     setEdge(edge); setMinLine(minW);
-    const pg = patternGeo(rl.kind, seed, `${minW.toFixed(4)}|${edge}`);
+    const pg = planarTile ? patternGeo(rl.kind, seed, `${minW.toFixed(4)}|${edge}`, planarTile) : patternGeo(rl.kind, seed, `${minW.toFixed(4)}|${edge}`);
     g = pg && pg.sharp ? pg : null;
   }
-  memo = { rl, kind: rl.kind, seed, edge, vec, map: rl.map, maxD: d.maxDiameter, n, g, minW };
+  memo = { tile: planarTile, rl, kind: rl.kind, seed, edge, vec, map: rl.map, maxD: d.maxDiameter, n, g, minW };
   return g;
 }
 /** Hybrid pattern: the formula's own height away from edges; across a jump edge a straight bevel between the
@@ -454,6 +456,8 @@ function basicFlat(kind: string, u: number, v: number): number | null {
   }
 }
 
+/** Tile (in cells) that covers a flat piece n cells across; the piece is centred in it (see planarOffset). */
+export const planarTileFor = (n: number) => Math.min(40, Math.max(10, Math.ceil((n + 2) / 10) * 10));
 export function planarPattern(rl: Relief, cellMM: number) {
   if (basicFlat(rl.kind, 0, 0) !== null) {
     const height = (u: number, v: number) => { let f = clamp(basicFlat(rl.kind, u, v)!, 0, 1); if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1); return rl.invert ? 1 - f : f; };
@@ -461,7 +465,10 @@ export function planarPattern(rl: Relief, cellMM: number) {
   }
   const n = Math.max(1, Math.round(rl.count));
   const pseudo = { relief: rl, maxDiameter: (cellMM * n) / Math.PI } as Design;
-  const g = geoOf(pseudo, cellMM, false), p = rl.kind === 'image' ? null : patternById(rl.kind), seed = rl.seed ?? 1;
+  planarTile = planarTileFor(n);
+  const g = geoOf(pseudo, cellMM, false);
+  planarTile = 0;
+  const p = rl.kind === 'image' ? null : patternById(rl.kind), seed = rl.seed ?? 1;
   const bev = bevelOf(rl, cellMM);
   const height = (u: number, v: number): number => {
     let f: number;

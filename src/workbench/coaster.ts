@@ -2,7 +2,7 @@
 // through), and a case that follows the plate outline with a clearance gap and a finger notch.
 // Geometry is exact: every outline, border and relief edge is a cut line of a planar tessellation (each
 // cut point located on the true function, shared between cells), so plates come out CAD-clean.
-import { planarPattern, sectionMul, type Design, type SectionKind } from './design';
+import { planarPattern, planarTileFor, sectionMul, type Design, type SectionKind } from './design';
 
 export type ReliefMode = 'emboss' | 'deboss' | 'through';
 export interface CoasterSet {
@@ -234,25 +234,29 @@ export function plateMesh(d: Design, step: number) {
   const pat = reliefOn ? planarPattern(rl, cell) : null;
   const bev = pat ? pat.bev : 0.4;
   const through = c.mode === 'through';
-  const L = pat?.sharp ? pat.levels : 0;
+  const L = pat?.sharp && !through ? pat.levels : 0;
+  // pattern coordinates kept positive (whole tiles shifted) so no seam runs along the centre lines
+  const U = (m: number) => m / cell + 840 + planarTileFor(Math.round(rl.count)) / 2;
+  const smoothCut = through && !!pat;                         // cut-through: cut exactly on the contour the holes follow
   const isos = through ? [0] : [-bev / 2, bev / 2];
-  const nC = 1 + (reliefOn ? (through ? 1 : 2) : 0) + L * isos.length;
+  const nC = 1 + (reliefOn ? (through ? 1 : 2) : 0) + L * isos.length + (smoothCut ? 1 : 0);
   const evalC = (x: number, y: number, out: Float32Array, k: number) => {
     const sd = o.sd(x, y);
     out[k] = sd;
     let q = k + 1;
     if (reliefOn) { if (through) out[q++] = sd + c.border; else { out[q++] = sd + c.border - bev / 2; out[q++] = sd + c.border + bev / 2; } }
-    if (L) { const e = pat!.edges(x / cell, y / cell)!; for (let l = 0; l < L; l++) for (const iso of isos) out[q++] = e[l] - iso; }
+    if (L) { const e = pat!.edges(U(x), U(y))!; for (let l = 0; l < L; l++) for (const iso of isos) out[q++] = e[l] - iso; }
+    if (smoothCut) out[q++] = pat!.height(U(x), U(y)) - 0.5;
   };
   const inner = (x: number, y: number) => through ? (o.sd(x, y) < -c.border ? 1 : 0) : Math.min(1, Math.max(0, (-o.sd(x, y) - c.border) / bev + 0.5));
   const T = c.thickness, dep = Math.min(rl.depth, through ? T : c.mode === 'deboss' ? T - 0.8 : 6);
   const zTop = (x: number, y: number) => {
     if (!pat || through) return T;
     const k = inner(x, y); if (k <= 0) return T;
-    const h = pat.height(x / cell, y / cell) * k;
+    const h = pat.height(U(x), U(y)) * k;
     return c.mode === 'emboss' ? T + dep * h : T - dep * h;
   };
-  const keep = (x: number, y: number) => o.sd(x, y) < 0 && !(through && pat && inner(x, y) > 0.5 && pat.height(x / cell, y / cell) > 0.5);
+  const keep = (x: number, y: number) => o.sd(x, y) < 0 && !(through && pat && inner(x, y) > 0.5 && pat.height(U(x), U(y)) > 0.5);
   return prism({ x0: -R - 1, y0: -R - 1, size: 2 * R + 2, step, nC, evalC, keep, zTop, zBot: () => 0 });
 }
 
