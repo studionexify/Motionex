@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultDesign } from '../../src/workbench/design';
+import { ALL_RELIEFS, defaultDesign } from '../../src/workbench/design';
 import { caseMesh, plateMesh } from '../../src/workbench/coaster';
 import { buildMesh } from '../../src/workbench/meshbuild';
 
@@ -17,5 +17,14 @@ describe('coasters', () => {
     const d = defaultDesign('coaster');
     for (const m of caseMesh(d, 0.6)) expect(openEdges(m)).toBe(0);
     const v = buildMesh(d, 'quick'); expect(v.triangles).toBeGreaterThan(1000);
+  });
+  it('every basic relief shows on the plate, raised and carved, whatever the depth sign', () => {
+    for (const r of ALL_RELIEFS.filter((x) => ['ribbed', 'pyramid', 'bumps', 'rings', 'sand'].includes(x.id)))
+      for (const [mode, depth] of [['emboss', r.depth], ['deboss', -r.depth]] as const) {
+        const d = defaultDesign('coaster'); d.relief = { ...d.relief, kind: r.id, count: r.count, depth }; d.coaster!.mode = mode;
+        const o = plateMesh(d, 1.5); let lo = 99, hi = 0;
+        for (let i = 2; i < o.pos.length; i += 3) if (o.pos[i] > 0.01) { lo = Math.min(lo, o.pos[i]); hi = Math.max(hi, o.pos[i]); }
+        expect(hi - lo, `${r.id} ${mode}`).toBeGreaterThan(0.3);
+      }
   });
 });

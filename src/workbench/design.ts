@@ -421,7 +421,32 @@ export function reliefEdges(d: Design, t: number, th: number, R: number): { sd: 
 }
 
 /** Pattern sampler for flat pieces (coasters): u, v in pattern cells, cellMM the cell size. */
+/** The basic reliefs laid flat (u, v in cells), each 0..1. */
+function basicFlat(kind: string, u: number, v: number): number | null {
+  const P = Math.PI * 2, c = (x: number) => 0.5 + 0.5 * Math.cos(P * x);
+  switch (kind) {
+    case 'ribbed': return c(u);
+    case 'grooves': return 1 - Math.max(0, Math.cos(P * u)) ** 4;
+    case 'fins': return Math.max(0, Math.cos(P * u)) ** 12;
+    case 'rings': return c(Math.hypot(u, v));
+    case 'wavy': return 0.5 + 0.5 * Math.sin(P * u + 1.2 * Math.sin(P * v / 3));
+    case 'guilloche': return 0.5 + 0.25 * (Math.sin(P * (u + v / 2)) + Math.sin(P * (u - v / 2)));
+    case 'vwaves': return 0.5 + 0.5 * Math.sin(P * u + 0.6 * Math.sin(P * v / 2));
+    case 'bubbles': { const row = Math.floor(v), x = frac(u + (row % 2) * 0.5) - 0.5, y = frac(v) - 0.5, r = Math.hypot(x, y) / 0.44; return r < 1 ? Math.sqrt(1 - r * r) : 0; }
+    case 'bumps': { const vv = v / 2, row = Math.floor(vv), x = frac(u + (row % 2) * 0.5) - 0.5, y = (frac(vv) - 0.5) * 2, r = Math.hypot(x, y * 0.5) / 0.46; return r < 1 ? Math.sqrt(1 - r * r) : 0; }
+    case 'pyramid': return 1 - Math.max(Math.abs(2 * frac(u) - 1), Math.abs(2 * frac(v) - 1));
+    case 'diamond': return Math.max(0, 1 - Math.abs(2 * frac(u) - 1) - Math.abs(2 * frac(v) - 1));
+    case 'hammered': return vnoise(u * 0.35, v * 0.35, 0);
+    case 'sand': return vnoise(u, v, 0);
+    default: return null;
+  }
+}
+
 export function planarPattern(rl: Relief, cellMM: number) {
+  if (basicFlat(rl.kind, 0, 0) !== null) {
+    const height = (u: number, v: number) => { let f = clamp(basicFlat(rl.kind, u, v)!, 0, 1); if ((rl.sharp ?? 1) !== 1) f = f ** (rl.sharp ?? 1); return rl.invert ? 1 - f : f; };
+    return { height, edges: (_u: number, _v: number): number[] | null => null, bev: bevelOf(rl, cellMM), sharp: false, levels: 0 };
+  }
   const n = Math.max(1, Math.round(rl.count));
   const pseudo = { relief: rl, maxDiameter: (cellMM * n) / Math.PI } as Design;
   const g = geoOf(pseudo, cellMM, false), p = rl.kind === 'image' ? null : patternById(rl.kind), seed = rl.seed ?? 1;

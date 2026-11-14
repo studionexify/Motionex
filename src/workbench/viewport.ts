@@ -185,6 +185,7 @@ export class StudioView {
     this.worker.onmessage = (e) => {
       this.busy = false;
       const done = e.data as { id: number; ok: boolean; mesh?: BuiltMesh; q: 'quick' | 'view'; key: string };
+      if (!done.ok) console.error('mesh worker:', (done as { error?: string }).error);
       if (done.ok && done.mesh) this.take(done.mesh, { q: done.q, key: done.key, seq: done.id });
       const next = this.queued; this.queued = null;
       if (next && next.key === this.shapeKey) this.request(next);
