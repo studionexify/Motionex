@@ -147,6 +147,7 @@ export class StudioView {
   private queued: { d: Design; q: 'quick' | 'view'; key: string; seq: number } | null = null;
   private lastApplied = 0;
   private builtQ: 'quick' | 'view' | null = null;
+  private busyQ: 'quick' | 'view' | null = null;
   /** shape key of the full-quality mesh on screen */
   private viewKey = '';
   private idle = 0;
@@ -171,8 +172,10 @@ export class StudioView {
     this.shapeKey = key;
     const seq = ++this.meshSeq;
     clearTimeout(this.idle);
+    // an edit makes any dense build in flight stale: drop it now so the quick preview is not stuck behind it
+    if (this.busy && this.busyQ === 'view' && this.worker) { this.worker.terminate(); this.worker = null; this.busy = false; this.queued = null; }
     this.request({ d, q: 'quick', key, seq });
-    if (!quick) this.idle = window.setTimeout(() => { if (this.shapeKey === key) this.request({ d, q: 'view', key, seq: ++this.meshSeq }); }, 350);
+    if (!quick) this.idle = window.setTimeout(() => { if (this.shapeKey === key) this.request({ d, q: 'view', key, seq: ++this.meshSeq }); }, d.family === 'coaster' ? 700 : 350);
   }
   private request(job: { d: Design; q: 'quick' | 'view'; key: string; seq: number }) {
     if (!this.meshWorker) {
@@ -182,13 +185,13 @@ export class StudioView {
       return;
     }
     if (this.busy) { this.queued = job; return; }
-    this.busy = true;
+    this.busy = true; this.busyQ = job.q;
     if (!this.worker) {
       try { this.worker = this.meshWorker(); } catch { this.meshWorker = null; this.busy = false; this.request(job); return; }
       this.worker.onerror = () => { this.worker?.terminate(); this.worker = null; this.meshWorker = null; this.busy = false; this.request(job); };
     }
     this.worker.onmessage = (e) => {
-      this.busy = false;
+      this.busy = false; this.busyQ = null;
       const done = e.data as { id: number; ok: boolean; mesh?: BuiltMesh; q: 'quick' | 'view'; key: string };
       if (!done.ok) console.error('mesh worker:', (done as { error?: string }).error);
       if (done.ok && done.mesh) this.take(done.mesh, { q: done.q, key: done.key, seq: done.id });
