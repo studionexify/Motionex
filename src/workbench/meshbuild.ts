@@ -4,7 +4,7 @@
 // and normals are smooth across curves but split at real creases (> 25°), so edges read sharp.
 import { surfaceGrid, triangulate } from './surfacegrid';
 import { faceMesh } from './tessellate';
-import { caseMesh, plateMesh } from './coaster';
+import { caseMesh, plateMesh, weld } from './coaster';
 import { makeInner, surfaceParts, type Design } from './design';
 import { isStandPart, seatOf } from './fitting';
 import { buildStand, standSoup } from './stand';
@@ -63,7 +63,7 @@ export interface BuiltMesh {
 /** Coaster set: the case (if on) with one plate beside it in the view; every plate laid out for export. */
 function buildCoaster(d: Design, q: MeshQuality): BuiltMesh {
   const c = d.coaster!;
-  const step = q === 'quick' ? 1.2 : q === 'view' ? 0.6 : 0.22;   // contours are cut exactly at any step
+  const step = q === 'quick' ? 1.0 : q === 'view' ? 0.4 : 0.2;   // contours are cut exactly at any step
   const parts: { pos: number[]; idx: number[]; dx: number; dy: number }[] = [];
   const plate = plateMesh(d, step), R = c.diameter / 2, Rc = R + c.gap + c.wall;
   if (c.caseOn) for (const m of caseMesh(d, step)) parts.push({ ...m, dx: 0, dy: 0 });
@@ -78,8 +78,9 @@ function buildCoaster(d: Design, q: MeshQuality): BuiltMesh {
     for (let k = 0; k < p.pos.length; k += 3) { pos[ov * 3] = p.pos[k] + p.dx; pos[ov * 3 + 1] = p.pos[k + 1] + p.dy; pos[ov * 3 + 2] = p.pos[k + 2]; ov++; }
     for (const i of p.idx) idx[oi++] = i + v0;
   }
-  const { position, normal } = creasedNormals(pos, idx, Math.cos((25 * Math.PI) / 180));
-  return { position, normal, src: new Uint32Array(idx.length), outer: { rows: 1, cols: 1, pos: new Float32Array(6) }, inner: { rows: 1, cols: 1 }, triangles: idx.length / 3 };
+  const w = weld(pos, idx), widx = Uint32Array.from(w.idx);
+  const { position, normal } = creasedNormals(pos, widx, Math.cos((25 * Math.PI) / 180));
+  return { position, normal, src: new Uint32Array(widx.length), outer: { rows: 1, cols: 1, pos: new Float32Array(6) }, inner: { rows: 1, cols: 1 }, triangles: widx.length / 3 };
 }
 
 /** The stand of a table shade as a mesh (print orientation: deck down). */

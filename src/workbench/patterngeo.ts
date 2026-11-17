@@ -84,6 +84,21 @@ function plateaus(vals: Float32Array): { sharp: boolean; base: number; cuts: { i
   return { sharp: true, base: top[0].c, cuts };
 }
 
+/** Length (cells) of the tile that repeats seamlessly along u (axis 0) or v (axis 1): 10 for most patterns, but
+ *  hexagonal lattices repeat every √3 rows, so ten of those is the period there (a plain 10 left a visible seam). */
+function tileOf(fn: (u: number, v: number, s: number) => number, seed: number, axis: 0 | 1): number {
+  for (const T of [TILE, 5 * Math.sqrt(3), TILE * Math.sqrt(3), TILE * 2 * Math.sqrt(3)]) {
+    const Tq = Math.round(T * RES) / RES;                        // the tile is sampled on whole pixels
+    let worst = 0;
+    for (let k = 1; k <= 48; k++) {
+      const u = 1.5 + ((k * 0.6180339887) % 1) * 7, v = 1.5 + ((k * 0.7548776662) % 1) * 7, a = fn(u, v, seed);
+      worst = Math.max(worst, Math.abs(a - (axis === 0 ? fn(u + Tq, v, seed) : fn(u, v + Tq, seed))));
+    }
+    if (worst < 0.02) return Tq;
+  }
+  return TILE;
+}
+
 const geoCache = new Map<string, Geo>();
 const mapCache = new WeakMap<HeightMap, Geo>();
 
@@ -93,9 +108,10 @@ export function patternGeo(id: string, seed: number, key: string): Geo | null {
   let g = geoCache.get(ck);
   if (g) return g;
   const p = PATTERNS.find((x) => x.id === id); if (!p) return null;
-  const W = TILE * RES, H = TILE * RES, vals = new Float32Array(W * H);
+  const tu = tileOf(p.fn, seed, 0), tv = tileOf(p.fn, seed, 1);
+  const W = Math.round(tu * RES), H = Math.round(tv * RES), vals = new Float32Array(W * H);
   for (let y = 0; y < H; y++) { const vv = (y + 0.5) / RES; for (let x = 0; x < W; x++) vals[y * W + x] = p.fn((x + 0.5) / RES, vv, seed); }
-  g = build(vals, W, H, RES, TILE, TILE, false, (x, y) => p.fn(x / RES, y / RES, seed));
+  g = build(vals, W, H, RES, W / RES, H / RES, false, (x, y) => p.fn(x / RES, y / RES, seed));
   if (geoCache.size > 6) geoCache.delete(geoCache.keys().next().value!);
   geoCache.set(ck, g);
   return g;

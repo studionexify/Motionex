@@ -151,10 +151,15 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   const steps = h('div', { class: 'mxs-steps', role: 'tablist' });
   const sliceTopB = h('button', { class: 'mxs-btn mxs-accent mxs-slicebtn', title: 'Slice: make the G-code and preview the print' }, icon('slice', 17), 'Slice');
   sliceTopB.onclick = () => { const need = !result || stale; S.step = 'slice'; S.rail = 'studio'; renderAll(); if (need) doSlice(); };
-  // UI scale (20–250 %), from the settings button at the top left
+  // UI scale (20–250 %), from the settings button at the top left. "Auto" (the default) fits the interface to the
+  // window: roomy screens keep the full size, smaller ones shrink panels and text so more of the piece stays in view.
   const SCALE_KEY = 'motionex.uiScale';
-  let uiScale = (() => { try { return Math.min(2.5, Math.max(0.2, +(localStorage.getItem(SCALE_KEY) ?? 1) || 1)); } catch { return 1; } })();
-  const applyScale = () => { root.style.setProperty('--mxs-ui', String(uiScale)); try { localStorage.setItem(SCALE_KEY, String(uiScale)); } catch { /* blocked */ } };
+  const autoScale = () => Math.round(Math.min(1, Math.max(0.78, Math.min(window.innerWidth / 2100, window.innerHeight / 980))) * 100) / 100;
+  const stored = (() => { try { const v = localStorage.getItem(SCALE_KEY); return v && v !== 'auto' && +v > 0 ? Math.min(2.5, Math.max(0.2, +v)) : null; } catch { return null; } })();
+  let autoOn = stored === null, uiScale = stored ?? autoScale();
+  const applyScale = () => { root.style.setProperty('--mxs-ui', String(uiScale)); try { localStorage.setItem(SCALE_KEY, autoOn ? 'auto' : String(uiScale)); } catch { /* blocked */ } };
+  const onWinResize = () => { if (autoOn) { const v = autoScale(); if (v !== uiScale) { uiScale = v; root.style.setProperty('--mxs-ui', String(uiScale)); if (!settingsPop.hidden) renderSettings(); } } };
+  window.addEventListener('resize', onWinResize);
   const settingsB = h('button', { class: 'mxs-ib', title: 'Settings', 'aria-label': 'Settings' }, icon('gear'));
   const settingsPop = h('div', { class: 'mxs-pop mxs-settings', hidden: true });
   const renderSettings = () => {
@@ -162,11 +167,12 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
     const pct = Math.round(uiScale * 100);
     const r = h('input', { type: 'range', min: '20', max: '250', step: '5', value: String(pct), 'aria-label': 'Interface scale' }) as HTMLInputElement;
     const n = h('input', { type: 'number', min: '20', max: '250', step: '5', value: String(pct), 'aria-label': 'Interface scale percent' }) as HTMLInputElement;
-    const set = (v: number) => { uiScale = Math.min(250, Math.max(20, Math.round(v))) / 100; r.value = n.value = String(Math.round(uiScale * 100)); applyScale(); };
+    const set = (v: number) => { autoOn = false; uiScale = Math.min(250, Math.max(20, Math.round(v))) / 100; r.value = n.value = String(Math.round(uiScale * 100)); applyScale(); };
     r.oninput = () => set(+r.value); n.onchange = () => set(+n.value);
-    const presets = h('div', { class: 'mxs-btnrow' }, ...[50, 75, 100, 125, 150, 200].map((v) => { const b = h('button', { class: `mxs-btn mxs-sm${pct === v ? ' on' : ''}` }, `${v}%`); b.onclick = () => { set(v); renderSettings(); }; return b; }));
+    const autoB = h('button', { class: `mxs-btn mxs-sm${autoOn ? ' on' : ''}`, title: 'Fit the interface to this window' }, 'Auto'); autoB.onclick = () => { autoOn = true; uiScale = autoScale(); applyScale(); renderSettings(); };
+    const presets = h('div', { class: 'mxs-btnrow' }, autoB, ...[75, 85, 100, 125, 150].map((v) => { const b = h('button', { class: `mxs-btn mxs-sm${!autoOn && pct === v ? ' on' : ''}` }, `${v}%`); b.onclick = () => { set(v); renderSettings(); }; return b; }));
     settingsPop.append(h('div', { class: 'mxs-pop-h' }, 'Interface scale'), h('div', { class: 'mxs-num mxs-scale' }, r, n, h('span', { class: 'mxs-unit' }, '%')), presets,
-      h('small', { class: 'mxs-muted' }, 'Scales every panel, button and text. 100% suits a 2560×1440 screen at 100% system scaling.'));
+      h('small', { class: 'mxs-muted' }, autoOn ? `Auto: ${pct}% for this window. Scales every panel, button and text.` : 'Scales every panel, button and text. 100% suits a 2560×1440 screen at 100% system scaling.'));
   };
   settingsB.onclick = (e) => { e.stopPropagation(); settingsPop.hidden = !settingsPop.hidden; if (!settingsPop.hidden) renderSettings(); };
   const closeSettings = (e: MouseEvent) => { if (!settingsPop.hidden && !settingsPop.contains(e.target as Node) && e.target !== settingsB) settingsPop.hidden = true; };
@@ -1308,51 +1314,89 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
 
   // ───────── profile editor (2D canvas)
   function profileEditor() {
-    const W = 296, Hh = 230;
-    const c = h('canvas', { class: 'mxs-prof', width: String(W * 2), height: String(Hh * 2), style: `width:100%;aspect-ratio:${W}/${Hh}` }) as HTMLCanvasElement;
-    const rIn = h('input', { type: 'number', step: '0.5', 'aria-label': 'Point radius' }) as HTMLInputElement;
+    const W = 296; let Hh = 230;
+    const c = h('canvas', { class: 'mxs-prof', width: String(W * 2), height: String(Hh * 2), style: `width:100%;aspect-ratio:${W}/${Hh}`, tabindex: '0', 'aria-label': 'Side profile: drag a point to reshape, double-click to add one, Delete removes the selected point' }) as HTMLCanvasElement;
+    const rIn = h('input', { type: 'number', step: '0.5', 'aria-label': 'Point diameter' }) as HTMLInputElement;
     const zIn = h('input', { type: 'number', step: '0.5', 'aria-label': 'Point height' }) as HTMLInputElement;
-    const el = h('div', { class: 'mxs-profwrap' }, c, h('div', { class: 'mxs-pnums' }, h('label', {}, 'Ø'), rIn, h('label', {}, 'height'), zIn, h('span', { class: 'mxs-unit' }, 'mm')));
-    let sel = 0, drag = false;
-    const pad = 22, maxR = () => D().maxDiameter / 2;
-    const box = () => { const s = Math.min((W - 2 * pad) / (maxR() * 1.15), (Hh - 2 * pad) / D().height); return { s, ox: W / 2 - 6, oy: Hh - pad }; };
+    const tip = h('div', { class: 'mxs-hint mxs-keep' }, 'Drag a point to reshape · double-click to add · Delete removes · arrows nudge');
+    const el = h('div', { class: 'mxs-profwrap' }, c, h('div', { class: 'mxs-pnums' }, h('label', {}, 'Ø'), rIn, h('label', {}, 'height'), zIn, h('span', { class: 'mxs-unit' }, 'mm')), tip);
+    let sel = 0, drag = false, hover = -1;
+    const pad = 24, maxR = () => D().maxDiameter / 2;
+    // The axis sits in the middle of the canvas, so the radius gets only half its width. The canvas follows the piece's
+    // proportions (low bowls get a short graph, tall vases a tall one) and every part of the profile always fits.
+    const fit = () => {
+      const sW = (W / 2 - pad) / (maxR() * 1.15), hh = Math.round(Math.max(170, Math.min(320, 2 * pad + D().height * sW)));
+      if (hh !== Hh) { Hh = hh; c.height = Hh * 2; c.style.aspectRatio = `${W}/${Hh}`; }
+    };
+    const box = () => { fit(); const s = Math.min((W / 2 - pad) / (maxR() * 1.15), (Hh - 2 * pad) / D().height); return { s, ox: W / 2, oy: Hh - pad }; };
     const nk = (t: number) => 1 - D().narrowTop * t;   // points are drawn where the curve really is (after narrowing)
     const toPx = (p: ProfilePoint) => { const { s, ox, oy } = box(); return [ox + p.r * nk(p.t) * maxR() * s, oy - p.t * D().height * s]; };
     const fromPx = (x: number, y: number): ProfilePoint => { const { s, ox, oy } = box(); const t = Math.max(0, Math.min(1, (oy - y) / s / D().height)); return { r: Math.max(0.02, Math.min(1.15, (x - ox) / s / maxR() / Math.max(0.05, nk(t)))), t }; };
     const css = (n: string) => getComputedStyle(root).getPropertyValue(n).trim();
+    const niceStep = (span: number) => { const raw = span / 4, m = 10 ** Math.floor(Math.log10(raw)), f = raw / m; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * m; };
     const draw = () => {
-      const g = c.getContext('2d')!; g.setTransform(2, 0, 0, 2, 0, 0); g.clearRect(0, 0, W, Hh);
-      const { s, ox, oy } = box();
+      const { s, ox, oy } = box(); const g = c.getContext('2d')!; g.setTransform(2, 0, 0, 2, 0, 0); g.clearRect(0, 0, W, Hh);
+      const line = css('--mxs-line'), muted = css('--mxs-muted'), accent = css('--mxs-accent');
       g.fillStyle = css('--mxs-soft'); g.fillRect(0, 0, W, Hh);
-      g.strokeStyle = css('--mxs-line'); g.lineWidth = 1; g.font = '10px system-ui'; g.fillStyle = css('--mxs-muted');
-      for (let z = 0; z <= D().height; z += 50) { const y = oy - z * s; g.beginPath(); g.moveTo(16, y); g.lineTo(W - 6, y); g.stroke(); g.fillText(String(z), 2, y + 3); }
-      g.setLineDash([3, 3]); g.beginPath(); g.moveTo(ox, 6); g.lineTo(ox, Hh - 6); g.stroke(); g.setLineDash([]);
-      g.fillText('axis', ox - 9, 12);
-      // mirrored ghost + fill
-      g.beginPath();
-      for (let i = 0; i <= 100; i++) { const t = i / 100, r = profileR(D(), t) * (1 - D().narrowTop * t) * maxR(); const x = ox + r * s, y = oy - t * D().height * s; if (i) g.lineTo(x, y); else g.moveTo(x, y); }
-      g.lineTo(ox, oy - D().height * s); g.lineTo(ox, oy); g.closePath(); g.fillStyle = css('--mxs-accent-soft'); g.fill();
-      g.beginPath();
-      for (let i = 0; i <= 100; i++) { const t = i / 100, r = profileR(D(), t) * (1 - D().narrowTop * t) * maxR(); const x = ox - r * s, y = oy - t * D().height * s; if (i) g.lineTo(x, y); else g.moveTo(x, y); }
-      g.strokeStyle = css('--mxs-line'); g.stroke();
-      g.beginPath();
-      for (let i = 0; i <= 100; i++) { const t = i / 100, r = profileR(D(), t) * (1 - D().narrowTop * t) * maxR(); const x = ox + r * s, y = oy - t * D().height * s; if (i) g.lineTo(x, y); else g.moveTo(x, y); }
-      g.strokeStyle = css('--mxs-accent'); g.lineWidth = 2; g.stroke();
-      D().profile.forEach((p, i) => { const [x, y] = toPx(p); g.beginPath(); g.arc(x, y, i === sel ? 5.5 : 4.5, 0, Math.PI * 2); g.fillStyle = i === sel ? css('--mxs-accent') : css('--mxs-panel'); g.fill(); g.strokeStyle = css('--mxs-accent'); g.lineWidth = 2; g.stroke(); });
+      g.lineWidth = 1; g.font = '10px system-ui';
+      // rulers in mm: height up the left edge, radius along the base
+      const sz = niceStep(D().height), sx = niceStep(maxR() * 1.1);
+      g.strokeStyle = line; g.fillStyle = muted; g.textAlign = 'left';
+      for (let z = 0; z <= D().height + 1e-6; z += sz) { const y = Math.round(oy - z * s) + 0.5; g.beginPath(); g.moveTo(26, y); g.lineTo(W - 6, y); g.stroke(); g.fillText(String(z), 3, y + 3.5); }
+      g.textAlign = 'center';
+      for (let r = sx; ox + r * s <= W - 8; r += sx) for (const sg of [1, -1]) { const x = Math.round(ox + sg * r * s) + 0.5; g.globalAlpha = 0.5; g.beginPath(); g.moveTo(x, oy); g.lineTo(x, 8); g.stroke(); g.globalAlpha = 1; if (sg > 0) g.fillText(String(Math.round(r * 2)), x, Hh - 8); }
+      g.fillText('Ø mm', ox, Hh - 8); g.textAlign = 'left';
+      g.setLineDash([3, 3]); g.beginPath(); g.moveTo(ox + 0.5, 8); g.lineTo(ox + 0.5, oy); g.stroke(); g.setLineDash([]);
+      g.fillStyle = muted; g.fillText('axis', ox + 4, 14);
+      const curve = (sg: number) => { for (let i = 0; i <= 120; i++) { const t = i / 120, r = profileR(D(), t) * (1 - D().narrowTop * t) * maxR(), x = ox + sg * r * s, y = oy - t * D().height * s; if (i) g.lineTo(x, y); else g.moveTo(x, y); } };
+      g.beginPath(); curve(1); g.lineTo(ox, oy - D().height * s); g.lineTo(ox, oy); g.closePath(); g.fillStyle = css('--mxs-accent-soft'); g.fill();
+      g.beginPath(); curve(-1); g.strokeStyle = line; g.lineWidth = 1.5; g.stroke();            // mirrored half, as the piece is round
+      g.beginPath(); curve(1); g.strokeStyle = accent; g.lineWidth = 2; g.lineJoin = 'round'; g.stroke();
+      D().profile.forEach((p, i) => { const [x, y] = toPx(p); g.beginPath(); g.arc(x, y, i === sel ? 6 : i === hover ? 5.5 : 4.5, 0, Math.PI * 2); g.fillStyle = i === sel ? accent : css('--mxs-panel'); g.fill(); g.strokeStyle = accent; g.lineWidth = 2; g.stroke(); });
       const p = D().profile[sel];
-      if (p) { const [x, y] = toPx(p); g.fillStyle = css('--mxs-text'); g.font = '600 10px system-ui'; g.fillText(`Ø ${(p.r * nk(p.t) * maxR() * 2).toFixed(1)} mm`, Math.min(W - 70, x + 8), y - 8); rIn.value = (p.r * nk(p.t) * maxR() * 2).toFixed(1); zIn.value = (p.t * D().height).toFixed(1); }
+      if (p) {
+        const [x, y] = toPx(p), txt = `Ø ${(p.r * nk(p.t) * maxR() * 2).toFixed(1)} · ${(p.t * D().height).toFixed(1)} mm`;
+        g.font = '600 10px system-ui'; const tw = g.measureText(txt).width, tx = Math.max(4, Math.min(W - tw - 6, x + 9 + tw > W - 4 ? x - tw - 9 : x + 9)), ty = y - 9 < 12 ? y + 16 : y - 9;
+        g.fillStyle = css('--mxs-text'); g.textAlign = 'left'; g.fillText(txt, tx, ty);
+        rIn.value = (p.r * nk(p.t) * maxR() * 2).toFixed(1); zIn.value = (p.t * D().height).toFixed(1);
+      }
     };
     const pos = (e: PointerEvent) => { const r = c.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * Hh]; };
+    const nearest = (x: number, y: number, reach: number) => { let best = -1, bd = reach; D().profile.forEach((p, i) => { const [px, py] = toPx(p); const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } }); return best; };
+    const isEndPt = (p: ProfilePoint) => { const sorted = [...D().profile].sort((a, b) => a.t - b.t); return p === sorted[0] || p === sorted[sorted.length - 1]; };
     c.onpointerdown = (e) => {
-      const [x, y] = pos(e); let best = -1, bd = 12;
-      D().profile.forEach((p, i) => { const [px, py] = toPx(p); const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } });
-      if (best >= 0) { sel = best; drag = true; c.setPointerCapture(e.pointerId); draw(); }
+      const [x, y] = pos(e), best = nearest(x, y, e.pointerType === 'touch' ? 20 : 13);
+      c.focus({ preventScroll: true });
+      if (best >= 0) { sel = best; drag = true; c.setPointerCapture(e.pointerId); c.style.cursor = 'grabbing'; draw(); }
     };
-    c.onpointermove = (e) => { if (!drag) return; const [x, y] = pos(e); const np = fromPx(x, y); const pts = D().profile; const p = pts[sel]; const sorted = [...pts].sort((a, b) => a.t - b.t); const isEnd = p === sorted[0] || p === sorted[sorted.length - 1]; p.r = np.r; if (!isEnd || pts.length < 2) p.t = np.t; draw(); liveMesh(); clearTimeout(meshTimer); meshTimer = window.setTimeout(renderEstimate, 60); };
-    c.onpointerup = () => { if (drag) { drag = false; changed(true); } };
-    c.ondblclick = (e) => { const [x, y] = pos(e as unknown as PointerEvent); const np = fromPx(x, y); D().profile.push(np); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(np); dChange(); draw(); };
-    rIn.onchange = () => { const p = D().profile[sel]; if (p) { p.r = Math.max(0.02, +rIn.value / 2 / maxR() / Math.max(0.05, nk(p.t))); dChange(); draw(); } };
-    zIn.onchange = () => { const p = D().profile[sel]; if (p) { p.t = Math.max(0, Math.min(1, +zIn.value / D().height)); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(p); dChange(); draw(); } };
+    c.onpointermove = (e) => {
+      const [x, y] = pos(e);
+      if (!drag) { const hv = nearest(x, y, 13); if (hv !== hover) { hover = hv; c.style.cursor = hv >= 0 ? 'grab' : 'crosshair'; draw(); } return; }
+      const np = fromPx(x, y), pts = D().profile, p = pts[sel];
+      p.r = np.r; if (!isEndPt(p) || pts.length < 2) p.t = np.t;
+      draw(); liveMesh(); clearTimeout(meshTimer); meshTimer = window.setTimeout(renderEstimate, 60);
+    };
+    c.onpointerup = () => { if (drag) { drag = false; c.style.cursor = hover >= 0 ? 'grab' : 'crosshair'; const p = D().profile[sel]; D().profile.sort((a, b) => a.t - b.t); sel = Math.max(0, D().profile.indexOf(p)); changed(true); draw(); } };
+    c.onpointerleave = () => { if (!drag && hover !== -1) { hover = -1; draw(); } };
+    c.ondblclick = (e) => {
+      const [x, y] = pos(e as unknown as PointerEvent), i = nearest(x, y, 13);
+      if (i >= 0) { sel = i; draw(); return; }
+      const np = fromPx(x, y); D().profile.push(np); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(np); dChange(); draw();
+    };
+    c.oncontextmenu = (e) => { e.preventDefault(); const [x, y] = pos(e as unknown as PointerEvent), i = nearest(x, y, 13); if (i >= 0) { sel = i; removePoint(); } };
+    c.onkeydown = (e) => {
+      const p = D().profile[sel]; if (!p) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removePoint(); return; }
+      const d = e.shiftKey ? 5 : 0.5, mmR = (dd: number) => dd / 2 / maxR() / Math.max(0.05, nk(p.t));
+      let hit = true;
+      if (e.key === 'ArrowLeft') p.r = Math.max(0.02, p.r - mmR(d)); else if (e.key === 'ArrowRight') p.r = Math.min(1.15, p.r + mmR(d));
+      else if (e.key === 'ArrowUp' && !isEndPt(p)) p.t = Math.min(1, p.t + d / D().height); else if (e.key === 'ArrowDown' && !isEndPt(p)) p.t = Math.max(0, p.t - d / D().height);
+      else if (e.key === 'Tab') { const n = D().profile.length, k = (sel + (e.shiftKey ? n - 1 : 1)) % n; if ((e.shiftKey && sel === 0) || (!e.shiftKey && sel === n - 1)) return; sel = k; e.preventDefault(); draw(); return; }
+      else hit = false;
+      if (hit) { e.preventDefault(); dChange(); draw(); }
+    };
+    rIn.onchange = () => { const p = D().profile[sel]; if (p) { p.r = Math.max(0.02, Math.min(1.15, +rIn.value / 2 / maxR() / Math.max(0.05, nk(p.t)))); dChange(); draw(); } };
+    zIn.onchange = () => { const p = D().profile[sel]; if (p && !isEndPt(p)) { p.t = Math.max(0, Math.min(1, +zIn.value / D().height)); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(p); dChange(); draw(); } else draw(); };
     const addPoint = () => { const pts = [...D().profile].sort((a, b) => a.t - b.t); let gi = 0, gap = 0; for (let i = 0; i < pts.length - 1; i++) if (pts[i + 1].t - pts[i].t > gap) { gap = pts[i + 1].t - pts[i].t; gi = i; } const t = (pts[gi].t + pts[gi + 1].t) / 2; const np = { r: profileR(D(), t), t }; D().profile.push(np); D().profile.sort((a, b) => a.t - b.t); sel = D().profile.indexOf(np); dChange(); draw(); };
     const removePoint = () => { if (D().profile.length <= 2) return; D().profile.splice(sel, 1); sel = Math.max(0, sel - 1); dChange(); draw(); };
     requestAnimationFrame(draw);
@@ -1363,7 +1407,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): () => 
   view.setTheme(root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches));
   view.setDesign(S.design, S.color);
   renderAll();
-  return () => { document.removeEventListener('mousedown', closeSettings); offBridge(); sliceWorker?.terminate(); offHost(); window.removeEventListener('keydown', onKey); view.dispose(); root.innerHTML = ''; root.classList.remove('mxs'); };
+  return () => { document.removeEventListener('mousedown', closeSettings); window.removeEventListener('resize', onWinResize); offBridge(); sliceWorker?.terminate(); offHost(); window.removeEventListener('keydown', onKey); view.dispose(); root.innerHTML = ''; root.classList.remove('mxs'); };
 }
 
 // ───────── helpers

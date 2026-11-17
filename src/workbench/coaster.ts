@@ -3,6 +3,8 @@
 // Geometry is exact: every outline, border and relief edge is a cut line of a planar tessellation (each
 // cut point located on the true function, shared between cells), so plates come out CAD-clean.
 import { planarPattern, sectionMul, type Design, type SectionKind } from './design';
+import { offset, SCALE, toInt } from '../engine/clipper';
+import type { Paths } from '../engine/types';
 
 export type ReliefMode = 'emboss' | 'deboss' | 'through';
 export interface CoasterSet {
@@ -54,20 +56,82 @@ export const defaultCoaster = (): CoasterSet => ({
 /** Case height: floor + the stack + a little headroom. */
 export const caseHeight = (c: CoasterSet) => c.floor + c.count * c.thickness + 1.5;
 
-// ── outline: polygon from the polar shape, and signed distance to it (negative inside)
+// ── outline: filleted polygon from the polar shape, and signed distance to it (negative inside)
+// Every contour a part is cut along (plate edge, case walls, the plain-border line) is its own polygon: the
+// polar outline offset by that contour's distance, then rounded so no corner is sharper than a printable,
+// hand-friendly radius. Sharp V cusps (scallops, flowers) and spiky tips (stars, teeth) come out smooth.
+const R_CONVEX = 0.9, R_CONCAVE = 1.2;   // mm: smallest radius of an outer corner / an inner notch
 // outlines are reused across rebuilds: changing a pattern or the case leaves the plate outline as it is
 const outlineCache = new Map<string, ReturnType<typeof buildOutline>>();
-function outline(c: CoasterSet) {
-  const key = `${c.section}|${c.sides}|${c.depth}|${c.diameter}`;
+function outline(c: CoasterSet, off = 0) {
+  const key = `${c.section}|${c.sides}|${c.depth}|${c.diameter}|${off.toFixed(4)}`;
   let o = outlineCache.get(key);
-  if (!o) { o = buildOutline(c); if (outlineCache.size > 6) outlineCache.clear(); outlineCache.set(key, o); }
+  if (!o) { o = buildOutline(c, off); if (outlineCache.size > 12) outlineCache.clear(); outlineCache.set(key, o); }
   return o;
 }
-function buildOutline(c: CoasterSet) {
-  const N = 1440, R = c.diameter / 2, xs = new Float64Array(N), ys = new Float64Array(N), rs = new Float64Array(N);
-  for (let i = 0; i < N; i++) { const th = (i / N) * Math.PI * 2, r = R * sectionMul(c, th); rs[i] = r; xs[i] = r * Math.cos(th); ys[i] = r * Math.sin(th); }
+function polarPoints(c: CoasterSet) {
+  const N = 1440, R = c.diameter / 2, pts: { X: number; Y: number }[] = [];
+  for (let i = 0; i < N; i++) { const th = (i / N) * Math.PI * 2, r = R * sectionMul(c, th); pts.push({ X: toInt(r * Math.cos(th)), Y: toInt(r * Math.sin(th)) }); }
+  return pts;
+}
+const areaOf = (p: { X: number; Y: number }[]) => { let a = 0; for (let i = 0; i < p.length; i++) { const q = p[(i + 1) % p.length]; a += p[i].X * q.Y - q.X * p[i].Y; } return a / 2; };
+/** The polar outline offset by `off` mm (+ grows, − shrinks) and rounded; one counter-clockwise ring in mm, or null if it vanished. */
+export function roundedRing(c: CoasterSet, off: number): { x: Float64Array; y: Float64Array } | null {
+  let ps: Paths = [polarPoints(c)];
+  if (off !== 0) ps = offset(ps, off, 'round');
+  if (!ps.length) return null;
+  ps = offset(offset(ps, R_CONCAVE, 'round'), -R_CONCAVE, 'round');      // fill inner notches to a radius
+  if (ps.length) ps = offset(offset(ps, -R_CONVEX, 'round'), R_CONVEX, 'round');   // soften outer tips
+  // Where a notch is exactly twice the fillet radius wide, the offset leaves a hair-thin needle behind: close and open by a hair to remove it.
+  if (ps.length) ps = offset(offset(ps, 0.04, 'round'), -0.04, 'round');
+  if (ps.length) ps = offset(offset(ps, -0.04, 'round'), 0.04, 'round');
+  if (!ps.length) return null;
+  let best = ps[0], ba = Math.abs(areaOf(ps[0]));
+  for (const q of ps) { const a = Math.abs(areaOf(q)); if (a > ba) { ba = a; best = q; } }
+  const ring = areaOf(best) < 0 ? best.slice().reverse() : best, n = ring.length;
+  const x0 = new Float64Array(n), y0 = new Float64Array(n);
+  for (let i = 0; i < n; i++) { x0[i] = ring[i].X / SCALE; y0[i] = ring[i].Y / SCALE; }
+  return simplifyRing(x0, y0, 0.0015);
+}
+/** Douglas–Peucker on a closed ring: drops vertices that sit within `tol` mm of the chord, so smooth arcs keep few,
+ *  evenly useful points (the distance field then has far fewer segments to test) at ≤1.5 µm of shape error. */
+function simplifyRing(x: Float64Array, y: Float64Array, tol: number) {
+  const n = x.length; if (n < 8) return { x, y };
+  let far = 0, fd = -1; for (let i = 1; i < n; i++) { const d = Math.hypot(x[i] - x[0], y[i] - y[0]); if (d > fd) { fd = d; far = i; } }
+  const keep = new Uint8Array(n); keep[0] = keep[far] = 1;
+  const stack: number[] = [0, far, far, n];                       // second span wraps back to vertex 0 (index n ≡ 0)
+  while (stack.length) {
+    const b = stack.pop()!, a = stack.pop()!;
+    if (b - a < 2) continue;
+    const ax = x[a % n], ay = y[a % n], bx = x[b % n], by = y[b % n], dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1e-12;
+    let m = -1, md = tol;
+    for (let i = a + 1; i < b; i++) { const d = Math.abs((x[i % n] - ax) * dy - (y[i % n] - ay) * dx) / L; if (d > md) { md = d; m = i; } }
+    if (m >= 0) { keep[m % n] = 1; stack.push(a, m, m, b); }
+  }
+  const ox: number[] = [], oy: number[] = [];
+  for (let i = 0; i < n; i++) if (keep[i]) { ox.push(x[i]); oy.push(y[i]); }
+  return { x: Float64Array.from(ox), y: Float64Array.from(oy) };
+}
+function buildOutline(c: CoasterSet, off: number) {
+  const R = c.diameter / 2, ring = roundedRing(c, off);
+  if (!ring) return { sd: (_x: number, _y: number) => 1e3, R };
+  const xs = ring.x, ys = ring.y, N = xs.length, Rb = R + Math.max(0, off);
+  // radial table (the outline is star-shaped about the centre): inside test away from the contour
+  const NR = 1440, rs = new Float64Array(NR);
+  for (let a = 0; a < N; a++) {
+    const b = (a + 1) % N, ex = xs[b] - xs[a], ey = ys[b] - ys[a];
+    const a1 = Math.atan2(ys[a], xs[a]); let da = Math.atan2(ys[b], xs[b]) - a1; if (da > Math.PI) da -= 2 * Math.PI; else if (da < -Math.PI) da += 2 * Math.PI;
+    if (Math.abs(da) > 3) continue;
+    const lo = Math.min(a1, a1 + da), hi = Math.max(a1, a1 + da);
+    for (let i = Math.floor((lo / (Math.PI * 2)) * NR); i <= Math.ceil((hi / (Math.PI * 2)) * NR); i++) {
+      const th = (i / NR) * Math.PI * 2, dx = Math.cos(th), dy = Math.sin(th), den = dx * ey - dy * ex;
+      if (Math.abs(den) < 1e-12) continue;
+      const t = (xs[a] * ey - ys[a] * ex) / den, s = (xs[a] * dy - ys[a] * dx) / den;
+      if (t > 0 && s >= -1e-9 && s <= 1 + 1e-9) { const k = ((i % NR) + NR) % NR; if (t > rs[k]) rs[k] = t; }
+    }
+  }
   // segment buckets: nearest-segment search ring by ring (exact, ~50x faster than a fixed window)
-  const B = Math.max(0.5, R / 40), G0 = -R * 1.6 - 30, GN = Math.ceil((R * 3.2 + 60) / B);
+  const B = Math.max(0.5, Rb / 40), G0 = -Rb * 1.6 - 30, GN = Math.ceil((Rb * 3.2 + 60) / B);
   const buckets: number[][] = Array.from({ length: GN * GN }, () => []);
   const cl = (v: number) => Math.min(GN - 1, Math.max(0, Math.floor((v - G0) / B)));
   for (let a = 0; a < N; a++) {
@@ -113,13 +177,21 @@ function buildOutline(c: CoasterSet) {
     return id;
   };
   const sd = (x: number, y: number) => {
-    const th = Math.atan2(y, x), fi = (((th / (Math.PI * 2)) % 1) + 1) % 1 * N, i0 = Math.floor(fi);
-    const rr = rs[i0 % N] + (rs[(i0 + 1) % N] - rs[i0 % N]) * (fi - i0), inside = Math.hypot(x, y) < rr;
+    const th = Math.atan2(y, x), fi = (((th / (Math.PI * 2)) % 1) + 1) % 1 * NR, i0 = Math.floor(fi);
+    const rr = rs[i0 % NR] + (rs[(i0 + 1) % NR] - rs[i0 % NR]) * (fi - i0);
+    let inside = Math.hypot(x, y) < rr;
     const ci = Math.min(GN - 1, Math.max(0, Math.floor((y - G0) / B))), cj = Math.min(GN - 1, Math.max(0, Math.floor((x - G0) / B)));
     const id = cellOf(ci, cj), list = cand[id];
     let dist: number;
-    if (list) { let best = Infinity; for (let k = 0; k < list.length; k++) { const d = segD(list[k], x, y); if (d < best) best = d; } dist = Math.sqrt(best); }
-    else dist = cellD[id];                                  // far from every contour: only the sign matters
+    if (list) {
+      let best = Infinity, bk = -1;
+      for (let k = 0; k < list.length; k++) { const d = segD(list[k], x, y); if (d < best) { best = d; bk = list[k]; } }
+      dist = Math.sqrt(best);
+      if (dist < 0.3 && bk >= 0) {                          // right at the contour: the side of the nearest segment decides (exact sign)
+        const b = (bk + 1) % N, bx = xs[b] - xs[bk], by = ys[b] - ys[bk], t = ((x - xs[bk]) * bx + (y - ys[bk]) * by) / (bx * bx + by * by);
+        if (t > 1e-6 && t < 1 - 1e-6) inside = bx * (y - ys[bk]) - by * (x - xs[bk]) > 0;
+      }
+    } else dist = cellD[id];                                // far from every contour: only the sign matters
     return inside ? -dist : dist;
   };
   return { sd, R };
@@ -226,10 +298,39 @@ export function prism(p: PrismIn): { pos: number[]; idx: number[] } {
   return { pos, idx };
 }
 
+/** Merge vertices that sit on the same point (cuts computed separately by neighbouring cells) and drop the
+ *  zero-area triangles that fans around collinear cut points leave behind. Keeps the mesh welded for smooth shading. */
+export function weld(pos: ArrayLike<number>, idx: ArrayLike<number>, tol = 1e-5): { pos: ArrayLike<number>; idx: number[] } {
+  const n = pos.length / 3, map = new Int32Array(n), q = 1 / tol;
+  let cap = 1; while (cap < n * 2) cap <<= 1;
+  const slot = new Int32Array(cap).fill(-1), qx = new Int32Array(n), qy = new Int32Array(n), qz = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = Math.round(pos[i * 3] * q), y = Math.round(pos[i * 3 + 1] * q), z = Math.round(pos[i * 3 + 2] * q);
+    qx[i] = x; qy[i] = y; qz[i] = z;
+    let hsh = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) & (cap - 1);
+    for (;;) {
+      const j = slot[hsh];
+      if (j < 0) { slot[hsh] = i; map[i] = i; break; }
+      if (qx[j] === x && qy[j] === y && qz[j] === z) { map[i] = j; break; }
+      hsh = (hsh + 1) & (cap - 1);
+    }
+  }
+  const out: number[] = [];
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = map[idx[t]], b = map[idx[t + 1]], c = map[idx[t + 2]];
+    if (a === b || b === c || a === c) continue;
+    const ux = pos[b * 3] - pos[a * 3], uy = pos[b * 3 + 1] - pos[a * 3 + 1], uz = pos[b * 3 + 2] - pos[a * 3 + 2], vx = pos[c * 3] - pos[a * 3], vy = pos[c * 3 + 1] - pos[a * 3 + 1], vz = pos[c * 3 + 2] - pos[a * 3 + 2];
+    if (Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) < 1e-9) continue;
+    out.push(a, b, c);
+  }
+  return { pos, idx: out };
+}
+
 /** Plate mesh at the origin (z from 0 to its top). */
 export function plateMesh(d: Design, step: number) {
   const c = d.coaster!, o = outline(c), rl = d.relief, R = o.R;
   const reliefOn = rl.kind !== 'smooth' && rl.depth !== 0;
+  const ob = reliefOn && c.border > 0 ? outline(c, -c.border) : o;     // the plain-border line: its own smooth contour
   const cell = c.diameter / Math.max(1, Math.round(rl.count));
   const pat = reliefOn ? planarPattern(rl, cell) : null;
   const bev = pat ? pat.bev : 0.4;
@@ -238,13 +339,12 @@ export function plateMesh(d: Design, step: number) {
   const isos = through ? [0] : [-bev / 2, bev / 2];
   const nC = 1 + (reliefOn ? (through ? 1 : 2) : 0) + L * isos.length;
   const evalC = (x: number, y: number, out: Float32Array, k: number) => {
-    const sd = o.sd(x, y);
-    out[k] = sd;
+    out[k] = o.sd(x, y);
     let q = k + 1;
-    if (reliefOn) { if (through) out[q++] = sd + c.border; else { out[q++] = sd + c.border - bev / 2; out[q++] = sd + c.border + bev / 2; } }
+    if (reliefOn) { const sb = ob.sd(x, y); if (through) out[q++] = sb; else { out[q++] = sb - bev / 2; out[q++] = sb + bev / 2; } }
     if (L) { const e = pat!.edges(x / cell, y / cell)!; for (let l = 0; l < L; l++) for (const iso of isos) out[q++] = e[l] - iso; }
   };
-  const inner = (x: number, y: number) => through ? (o.sd(x, y) < -c.border ? 1 : 0) : Math.min(1, Math.max(0, (-o.sd(x, y) - c.border) / bev + 0.5));
+  const inner = (x: number, y: number) => through ? (ob.sd(x, y) < 0 ? 1 : 0) : Math.min(1, Math.max(0, -ob.sd(x, y) / bev + 0.5));
   const T = c.thickness, dep = Math.min(rl.depth, through ? T : c.mode === 'deboss' ? T - 0.8 : 6);
   const zTop = (x: number, y: number) => {
     if (!pat || through) return T;
@@ -259,6 +359,7 @@ export function plateMesh(d: Design, step: number) {
 /** Case mesh at the origin: floor under the outer outline, wall ring with a finger notch at the front. */
 export function caseMesh(d: Design, step: number) {
   const c = d.coaster!, o = outline(c), R = o.R + c.gap + c.wall + 1;
+  const inn = outline(c, c.gap), out = outline(c, c.gap + c.wall);       // wall faces: each a smooth contour of its own
   const H = caseHeight(c), F = c.floor;
   // finger opening: a straight-sided slot down to the floor, with rounded top corners
   const Rc = o.R + c.gap + c.wall / 2, halfW = c.notch / 2, rr = Math.min(4, halfW * 0.3, (H - F) * 0.5);
@@ -270,11 +371,10 @@ export function caseMesh(d: Design, step: number) {
     const k = Math.max(0, t);
     return H - rr + Math.sqrt(Math.max(0, rr * rr - (rr - k) ** 2));
   };
-  const outer = c.gap + c.wall;
-  const floorM = prism({ x0: -R, y0: -R, size: 2 * R, step, nC: 1, evalC: (x, y, out, k) => { out[k] = o.sd(x, y) - outer; }, keep: (x, y) => o.sd(x, y) < outer, zTop: () => F, zBot: () => 0 });
+  const floorM = prism({ x0: -R, y0: -R, size: 2 * R, step, nC: 1, evalC: (x, y, o2, k) => { o2[k] = out.sd(x, y); }, keep: (x, y) => out.sd(x, y) < 0, zTop: () => F, zBot: () => 0 });
   const ringM = prism({ x0: -R, y0: -R, size: 2 * R, step, nC: 3,
-    evalC: (x, y, out, k) => { const s = o.sd(x, y); out[k] = s - c.gap; out[k + 1] = s - outer; out[k + 2] = c.notch > 0 ? sOf(x, y) - halfW : 1; },
-    keep: (x, y) => { const s = o.sd(x, y); return s > c.gap && s < outer && !(c.notch > 0 && sOf(x, y) < halfW); }, zTop: wallH, zBot: () => F });
+    evalC: (x, y, o2, k) => { o2[k] = inn.sd(x, y); o2[k + 1] = out.sd(x, y); o2[k + 2] = c.notch > 0 ? sOf(x, y) - halfW : 1; },
+    keep: (x, y) => inn.sd(x, y) > 0 && out.sd(x, y) < 0 && !(c.notch > 0 && sOf(x, y) < halfW), zTop: wallH, zBot: () => F });
   return [floorM, ringM];
 }
 
