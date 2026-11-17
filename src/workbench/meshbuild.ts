@@ -63,10 +63,12 @@ export interface BuiltMesh {
 /** Coaster set: the case (if on) with one plate beside it in the view; every plate laid out for export. */
 function buildCoaster(d: Design, q: MeshQuality): BuiltMesh {
   const c = d.coaster!;
-  const step = q === 'quick' ? 1.0 : q === 'view' ? 0.4 : 0.2;   // contours are cut exactly at any step
+  // Contours are cut exactly at any step, but a relief's bevel corners are arcs of ~0.25 mm: the plate needs a fine grid to
+  // show them round. The case is plain walls, so it can stay coarse.
+  const step = q === 'quick' ? 0.8 : q === 'view' ? 0.2 : 0.15, caseStep = q === 'quick' ? 1.0 : q === 'view' ? 0.5 : 0.25;
   const parts: { pos: number[]; idx: number[]; dx: number; dy: number }[] = [];
   const plate = plateMesh(d, step), R = c.diameter / 2, Rc = R + c.gap + c.wall;
-  if (c.caseOn) for (const m of caseMesh(d, step)) parts.push({ ...m, dx: 0, dy: 0 });
+  if (c.caseOn) for (const m of caseMesh(d, caseStep)) parts.push({ ...m, dx: 0, dy: 0 });
   const startX = c.caseOn ? Rc + R + 12 : 0;
   const n = q === 'export' ? c.count : 1, perRow = Math.max(1, Math.ceil(Math.sqrt(n)));
   for (let k = 0; k < n; k++) parts.push({ ...plate, dx: startX + (k % perRow) * (2 * R + 8), dy: Math.floor(k / perRow) * (2 * R + 8) });
